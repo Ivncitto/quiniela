@@ -6,17 +6,19 @@ Diseño:
   - Cada partido en formato compacto de una sola fila:
       [Equipo Local] [Score] — [Score] [Equipo Visitante] | [💾 Guardar] [🔒/🔓]
   - Los nombres de equipo son editables (clave para partidos eliminatorios).
-  - Bloqueo/desbloqueo individual y por grupo/fase.
+  - En Grupos los partidos se listan en orden cronológico (por fecha).
+  - Bloqueo/desbloqueo individual y de toda la fase.
 """
 
 import streamlit as st
+from datetime import datetime
 
 from modules.firestore_db import (
     get_partidos,
     actualizar_marcador_real,
     actualizar_equipos_partido,
+    guardar_partidos_batch,
     toggle_bloqueo_partido,
-    toggle_bloqueo_grupo,
     toggle_bloqueo_fase,
 )
 
@@ -115,10 +117,11 @@ def _partido_row(partido: dict) -> None:
 
     with c_sl:
         score_local = st.number_input(
-            "gl", value=int(real_l) if hay_score else 0,
+            "gl", value=int(real_l) if hay_score else None,
             min_value=0, max_value=30,
             key=f"adm_sl_{pid}",
             label_visibility="collapsed",
+            placeholder="0",
         )
 
     with c_sep:
@@ -126,10 +129,11 @@ def _partido_row(partido: dict) -> None:
 
     with c_sv:
         score_vis = st.number_input(
-            "gv", value=int(real_v) if hay_score else 0,
+            "gv", value=int(real_v) if hay_score else None,
             min_value=0, max_value=30,
             key=f"adm_sv_{pid}",
             label_visibility="collapsed",
+            placeholder="0",
         )
 
     with c_tv:
@@ -144,9 +148,12 @@ def _partido_row(partido: dict) -> None:
             # Guardar nombres si cambiaron
             if nuevo_local.strip() != e_local or nuevo_vis.strip() != e_visitante:
                 actualizar_equipos_partido(pid, nuevo_local, nuevo_vis)
-            # Guardar marcador real
-            actualizar_marcador_real(pid, score_local, score_vis)
-            st.toast(f"✅ {nuevo_local} {score_local}–{score_vis} {nuevo_vis}")
+            # Guardar marcador solo si ambos campos tienen valor
+            if score_local is not None and score_vis is not None:
+                actualizar_marcador_real(pid, int(score_local), int(score_vis))
+                st.toast(f"✅ {nuevo_local} {score_local}–{score_vis} {nuevo_vis}")
+            else:
+                st.toast(f"✏️ {nuevo_local} vs {nuevo_vis} (sin marcador)")
             st.rerun()
 
     with c_lock:
@@ -161,12 +168,81 @@ def _partido_row(partido: dict) -> None:
     )
 
 
-def _tab_grupos(partidos: list[dict]) -> None:
-    """Renderiza el tab de Fase de Grupos con sub-secciones por grupo."""
-    partidos_grupos = [p for p in partidos if p.get("fase") == "Grupos"]
-    grupos = sorted({p.get("grupo", "") for p in partidos_grupos if p.get("grupo")})
+def _guardar_todos(lista: list[dict]) -> int:
+    """
+    Guarda en lote nombres y marcadores de todos los partidos de `lista`,
+    leyendo los valores actuales de los widgets desde session_state.
 
-    if not grupos:
+    Solo guarda el marcador de un partido si AMBOS goles tienen valor.
+    Devuelve cuántos partidos tuvieron cambios.
+    """
+    cambios = []
+    for partido in lista:
+        pid  = partido["id"]
+        k_tl = f"adm_tl_{pid}"
+        k_sl = f"adm_sl_{pid}"
+        k_sv = f"adm_sv_{pid}"
+        k_tv = f"adm_tv_{pid}"
+
+        # Si el partido no se ha renderizado aún, no hay nada que leer
+        if k_sl not in st.session_state and k_tl not in st.session_state:
+            continue
+
+        cambio: dict = {"id": pid}
+
+        # ── Nombres de equipo ──
+        nl = str(st.session_state.get(k_tl, partido.get("equipo_local", ""))).strip()
+        nv = str(st.session_state.get(k_tv, partido.get("equipo_visitante", ""))).strip()
+        if nl and nv and (nl != partido.get("equipo_local", "") or nv != partido.get("equipo_visitante", "")):
+            cambio["equipo_local"]     = nl
+            cambio["equipo_visitante"] = nv
+
+        # ── Marcador (solo si ambos goles están definidos) ──
+        sl = st.session_state.get(k_sl)
+        sv = st.session_state.get(k_sv)
+        if sl is not None and sv is not None:
+            mr = partido.get("marcador_real", {})
+            if mr.get("local") != sl or mr.get("visitante") != sv:
+                cambio["marcador_real"] = {"local": int(sl), "visitante": int(sv)}
+
+        if len(cambio) > 1:   # tiene algo además de "id"
+            cambios.append(cambio)
+
+    if cambios:
+        guardar_partidos_batch(cambios)
+    return len(cambios)
+
+
+def _boton_guardar_todo(lista: list[dict], key: str) -> None:
+    """Botón que guarda de una vez todos los marcadores de `lista`."""
+    if st.button("💾 Guardar TODOS los marcadores", key=key, type="primary", use_container_width=True):
+        n = _guardar_todos(lista)
+        st.toast(f"✅ {n} partido(s) guardado(s)." if n else "No había cambios para guardar.")
+        st.rerun()
+
+
+def _fmt_fecha_corta(fecha_iso: str) -> str:
+    """Formatea fecha ISO a 'Jue 11 Jun · 19:00' para el separador cronológico."""
+    try:
+        dt = datetime.fromisoformat(fecha_iso)
+        dias  = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+        meses = ["", "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+        return f"{dias[dt.weekday()]} {dt.day} {meses[dt.month]} · {dt.strftime('%H:%M')}"
+    except Exception:
+        return fecha_iso[:16] if len(fecha_iso) >= 16 else fecha_iso
+
+
+def _tab_grupos(partidos: list[dict]) -> None:
+    """
+    Renderiza el tab de Fase de Grupos como lista CRONOLÓGICA (por fecha),
+    del primer partido al último, para asignar marcadores con facilidad.
+    """
+    partidos_grupos = sorted(
+        [p for p in partidos if p.get("fase") == "Grupos"],
+        key=lambda x: x.get("fecha", ""),
+    )
+
+    if not partidos_grupos:
         st.info("No hay partidos de Grupos cargados.")
         return
 
@@ -182,47 +258,42 @@ def _tab_grupos(partidos: list[dict]) -> None:
             st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
+    _boton_guardar_todo(partidos_grupos, key="adm_save_all_grupos_top")
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Sub-secciones por grupo ────────────────────────────────────────────────
-    for grupo in grupos:
-        ps_grupo = [p for p in partidos_grupos if p.get("grupo") == grupo]
-        bloq_cnt  = sum(1 for p in ps_grupo if p.get("bloqueado", False))
-        abie_cnt  = len(ps_grupo) - bloq_cnt
+    # ── Cabecera de columnas ───────────────────────────────────────────────────
+    hc1, hc2, hc3, hc4, hc5, hc6, hc7 = st.columns(
+        [2.8, 0.75, 0.25, 0.75, 2.8, 1.3, 0.9]
+    )
+    hc1.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">LOCAL</span>',       unsafe_allow_html=True)
+    hc2.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">GOL</span>',        unsafe_allow_html=True)
+    hc4.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">GOL</span>',        unsafe_allow_html=True)
+    hc5.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">VISITANTE</span>',  unsafe_allow_html=True)
 
-        with st.expander(
-            f"📌 Grupo {grupo}  —  {len(ps_grupo)} partidos  "
-            f"| 🔓 {abie_cnt} abiertos  🔒 {bloq_cnt} cerrados",
-            expanded=False,
-        ):
-            # Botones de bloqueo por grupo
-            cb1, cb2, cb3 = st.columns([1, 1, 3])
-            with cb1:
-                if st.button(f"🔒 Bloquear Grupo {grupo}", key=f"blq_g_{grupo}", use_container_width=True):
-                    toggle_bloqueo_grupo(grupo, True)
-                    st.rerun()
-            with cb2:
-                if st.button(f"🔓 Desbloquear Grupo {grupo}", key=f"desblq_g_{grupo}", use_container_width=True):
-                    toggle_bloqueo_grupo(grupo, False)
-                    st.rerun()
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            # Cabecera de columnas
-            hc1, hc2, hc3, hc4, hc5, hc6, hc7 = st.columns(
-                [2.8, 0.75, 0.25, 0.75, 2.8, 1.3, 0.9]
+    # ── Lista cronológica con separador de día ─────────────────────────────────
+    dia_actual = None
+    for partido in partidos_grupos:
+        dia = partido.get("fecha", "")[:10]   # YYYY-MM-DD
+        if dia != dia_actual:
+            dia_actual = dia
+            st.markdown(
+                f'<div class="grupo-header">📅 {_fmt_fecha_corta(partido.get("fecha", ""))}'
+                f'<span style="color:rgba(200,230,200,0.4); font-size:0.78rem;">'
+                f'&nbsp;&nbsp;·&nbsp;&nbsp;Grupo {partido.get("grupo", "?")}</span></div>',
+                unsafe_allow_html=True,
             )
-            hc1.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">LOCAL</span>',       unsafe_allow_html=True)
-            hc2.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">GOL</span>',        unsafe_allow_html=True)
-            hc4.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">GOL</span>',        unsafe_allow_html=True)
-            hc5.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">VISITANTE</span>',  unsafe_allow_html=True)
+        _partido_row(partido)
 
-            for partido in ps_grupo:
-                _partido_row(partido)
+    st.markdown("<br>", unsafe_allow_html=True)
+    _boton_guardar_todo(partidos_grupos, key="adm_save_all_grupos_bottom")
 
 
 def _tab_fase(partidos: list[dict], fase: str) -> None:
     """Renderiza un tab de fase eliminatoria."""
-    ps_fase = [p for p in partidos if p.get("fase") == fase]
+    ps_fase = sorted(
+        [p for p in partidos if p.get("fase") == fase],
+        key=lambda x: x.get("fecha", ""),
+    )
 
     if not ps_fase:
         st.info(f"No hay partidos de {fase} cargados aún.")
@@ -240,6 +311,8 @@ def _tab_fase(partidos: list[dict], fase: str) -> None:
             st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
+    _boton_guardar_todo(ps_fase, key=f"adm_save_all_{fase}_top")
+    st.markdown("<br>", unsafe_allow_html=True)
 
     # Cabecera
     hc1, hc2, hc3, hc4, hc5, hc6, hc7 = st.columns(
@@ -252,6 +325,9 @@ def _tab_fase(partidos: list[dict], fase: str) -> None:
 
     for partido in ps_fase:
         _partido_row(partido)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    _boton_guardar_todo(ps_fase, key=f"adm_save_all_{fase}_bottom")
 
 
 # ─── Función pública principal ────────────────────────────────────────────────

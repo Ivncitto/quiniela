@@ -12,7 +12,11 @@ Cada partido en formato compacto:
 import streamlit as st
 from datetime import datetime
 
-from modules.firestore_db import get_partidos, get_pronosticos_usuario, guardar_pronostico
+from modules.firestore_db import (
+    get_partidos,
+    get_pronosticos_usuario,
+    guardar_pronosticos_batch,
+)
 
 _ORDEN_FASES = [
     "Grupos", "16avos", "Octavos", "Cuartos",
@@ -103,8 +107,8 @@ def _partido_card(partido: dict, uid: str, mis_pronosticos: dict) -> None:
 
     pronostico  = mis_pronosticos.get(pid, {})
     hay_prono   = bool(pronostico)
-    mi_local    = int(pronostico.get("local",     0)) if hay_prono else 0
-    mi_visitante= int(pronostico.get("visitante", 0)) if hay_prono else 0
+    mi_local    = int(pronostico.get("local",     0)) if hay_prono else None
+    mi_visitante= int(pronostico.get("visitante", 0)) if hay_prono else None
 
     # Clase CSS de la tarjeta
     clase = "match-card"
@@ -145,7 +149,7 @@ def _partido_card(partido: dict, uid: str, mis_pronosticos: dict) -> None:
         val_l = st.number_input(
             "gol_local", value=mi_local, min_value=0, max_value=30,
             key=f"tb_sl_{pid}", label_visibility="collapsed",
-            disabled=bloqueado,
+            disabled=bloqueado, placeholder="0",
         )
     with c_sep:
         st.markdown('<div class="vs-sep">—</div>', unsafe_allow_html=True)
@@ -153,50 +157,60 @@ def _partido_card(partido: dict, uid: str, mis_pronosticos: dict) -> None:
         val_v = st.number_input(
             "gol_vis", value=mi_visitante, min_value=0, max_value=30,
             key=f"tb_sv_{pid}", label_visibility="collapsed",
-            disabled=bloqueado,
+            disabled=bloqueado, placeholder="0",
         )
     with c_tv:
         st.markdown(f'<div class="team-name-right">{e_visitante}</div>', unsafe_allow_html=True)
     with c_btn:
+        # Sin botón individual: solo indicador de estado.
+        # El guardado se hace con el botón "Guardar TODOS" de la página.
         if bloqueado:
             badge = '<span class="badge-ok">✅ Guardado</span>' if hay_prono else '<span class="badge-sin">Sin pronóstico</span>'
-            st.markdown(badge, unsafe_allow_html=True)
+        elif hay_prono:
+            badge = '<span class="badge-ok">✅ Guardado</span>'
         else:
-            if st.button("💾 Guardar", key=f"tb_save_{pid}", use_container_width=True):
-                guardar_pronostico(uid, pid, val_l, val_v)
-                st.toast(f"✅ {e_local} {val_l}–{val_v} {e_visitante}")
-                st.rerun()
+            badge = '<span class="badge-sin">✏️ Sin guardar</span>'
+        st.markdown(
+            f'<div style="padding-top:0.4rem; text-align:center;">{badge}</div>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown('</div>', unsafe_allow_html=True)
 
 
 def _tab_grupos(partidos: list[dict], uid: str, mis_pronosticos: dict) -> None:
-    """Renderiza el tab de Fase de Grupos organizado por Jornada."""
+    """Renderiza el tab de Fase de Grupos organizado por Grupo (A, B, C…)."""
     ps_grupos = [p for p in partidos if p.get("fase") == "Grupos"]
 
     if not ps_grupos:
         st.info("No hay partidos de Grupos cargados.")
         return
 
-    # Agrupar por jornada
-    for jornada in [1, 2, 3]:
-        ps_jornada = sorted(
-            [p for p in ps_grupos if p.get("jornada") == jornada],
+    grupos = sorted({p.get("grupo", "") for p in ps_grupos if p.get("grupo")})
+
+    # Sin campo 'grupo': mostrar todos ordenados por fecha (fallback)
+    if not grupos:
+        for partido in sorted(ps_grupos, key=lambda x: x.get("fecha", "")):
+            _partido_card(partido, uid, mis_pronosticos)
+        return
+
+    # Agrupar por Grupo
+    for grupo in grupos:
+        ps_grupo = sorted(
+            [p for p in ps_grupos if p.get("grupo") == grupo],
             key=lambda x: x.get("fecha", ""),
         )
-        if not ps_jornada:
-            continue
 
-        # Calcular progreso de pronósticos en esta jornada
-        con_prono = sum(1 for p in ps_jornada if p["id"] in mis_pronosticos)
-        total_j   = len(ps_jornada)
+        # Calcular progreso de pronósticos en este grupo
+        con_prono = sum(1 for p in ps_grupo if p["id"] in mis_pronosticos)
+        total_g   = len(ps_grupo)
 
         with st.expander(
-            f"📌 Jornada {jornada}  —  {total_j} partidos  |  "
-            f"✅ {con_prono} pronosticados  ·  ⏳ {total_j - con_prono} pendientes",
-            expanded=(jornada == 1),
+            f"📌 Grupo {grupo}  —  {total_g} partidos  |  "
+            f"✅ {con_prono} pronosticados  ·  ⏳ {total_g - con_prono} pendientes",
+            expanded=(grupo == grupos[0]),
         ):
-            for partido in ps_jornada:
+            for partido in ps_grupo:
                 _partido_card(partido, uid, mis_pronosticos)
 
 
@@ -222,6 +236,41 @@ def _tab_fase(partidos: list[dict], fase: str, uid: str, mis_pronosticos: dict) 
 
     for partido in ps_fase:
         _partido_card(partido, uid, mis_pronosticos)
+
+
+def _guardar_todos_pronosticos(uid: str, partidos: list[dict], mis_pronosticos: dict) -> int:
+    """
+    Guarda en lote todos los pronósticos que el usuario haya llenado en
+    partidos NO bloqueados, leyendo los valores de los widgets en session_state.
+
+    Solo guarda un partido si AMBOS marcadores tienen valor y si cambió
+    respecto a lo ya guardado. Devuelve cuántos se guardaron.
+    """
+    predicciones = []
+    for partido in partidos:
+        if partido.get("bloqueado", False):
+            continue
+        pid  = partido["id"]
+        k_sl = f"tb_sl_{pid}"
+        k_sv = f"tb_sv_{pid}"
+        if k_sl not in st.session_state or k_sv not in st.session_state:
+            continue
+
+        sl = st.session_state.get(k_sl)
+        sv = st.session_state.get(k_sv)
+        if sl is None or sv is None:
+            continue
+
+        # Omitir si no cambió respecto a lo ya guardado
+        prev = mis_pronosticos.get(pid, {})
+        if prev.get("local") == sl and prev.get("visitante") == sv:
+            continue
+
+        predicciones.append((pid, int(sl), int(sv)))
+
+    if predicciones:
+        return guardar_pronosticos_batch(uid, predicciones)
+    return 0
 
 
 # ── Función pública ───────────────────────────────────────────────────────────
@@ -269,6 +318,16 @@ def mostrar_tablero():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # ── Guardar todos los pronósticos de una vez ───────────────────────────────
+    st.info("💡 Llena los marcadores que quieras y pulsa **Guardar TODOS** para guardarlos de una sola vez.")
+    if st.button("💾 Guardar TODOS mis pronósticos", key="tb_save_all_top",
+                 type="primary", use_container_width=True):
+        n = _guardar_todos_pronosticos(uid, partidos, mis_pronosticos)
+        st.toast(f"✅ {n} pronóstico(s) guardado(s)." if n else "No había pronósticos nuevos para guardar.")
+        st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
     # ── Pestañas por fase ──────────────────────────────────────────────────────
     fases_disponibles = [
         f for f in _ORDEN_FASES
@@ -287,6 +346,14 @@ def mostrar_tablero():
                 _tab_grupos(partidos, uid, mis_pronosticos)
             else:
                 _tab_fase(partidos, fase, uid, mis_pronosticos)
+
+    # ── Guardar todos (abajo) ──────────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("💾 Guardar TODOS mis pronósticos", key="tb_save_all_bottom",
+                 type="primary", use_container_width=True):
+        n = _guardar_todos_pronosticos(uid, partidos, mis_pronosticos)
+        st.toast(f"✅ {n} pronóstico(s) guardado(s)." if n else "No había pronósticos nuevos para guardar.")
+        st.rerun()
 
     # ── Refresco manual ────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)

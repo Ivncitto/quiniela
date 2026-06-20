@@ -135,6 +135,11 @@ def restaurar_sesion() -> None:
     if st.session_state.get("autenticado"):
         return
 
+    # Si el usuario cerró sesión explícitamente en esta sesión del navegador,
+    # NO volver a restaurar desde la cookie (que puede tardar un ciclo en borrarse).
+    if st.session_state.get("_sesion_cerrada"):
+        return
+
     token = cm.get(_COOKIE_NOMBRE)
     if not token:
         return
@@ -180,6 +185,7 @@ def login(nombre_usuario: str, password: str) -> tuple[bool, str]:
     rol = str(config.get("rol", "familiar"))
 
     # ── Paso 3: Iniciar sesión (perfil Firestore + session_state) ─────────────
+    st.session_state.pop("_sesion_cerrada", None)   # reactivar restauración
     _iniciar_sesion(clave, rol)
 
     # ── Paso 4: Guardar cookie firmada en el dispositivo ──────────────────────
@@ -208,6 +214,10 @@ def logout():
 
     for clave in ["autenticado", "uid", "nombre", "rol"]:
         st.session_state.pop(clave, None)
+
+    # Marca de cierre explícito: impide que restaurar_sesion() reabra la sesión
+    # antes de que la cookie termine de borrarse.
+    st.session_state["_sesion_cerrada"] = True
 
 
 # ─── Helpers de estado ────────────────────────────────────────────────────────

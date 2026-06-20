@@ -149,6 +149,36 @@ def actualizar_marcador_real(partido_id: str, local: int, visitante: int):
     get_todos_pronosticos.clear()
 
 
+def guardar_partidos_batch(cambios: list[dict]):
+    """
+    (Admin) Guarda en LOTE nombres y/o marcadores de varios partidos.
+
+    Args:
+        cambios: lista de dicts. Cada uno debe tener "id" y opcionalmente
+                 "equipo_local"+"equipo_visitante" y/o "marcador_real".
+                 Solo se escriben los campos presentes.
+    """
+    db = get_db()
+    batch = db.batch()
+    escritos = 0
+    for c in cambios:
+        ref  = db.collection("partidos").document(c["id"])
+        data = {}
+        if "equipo_local" in c and "equipo_visitante" in c:
+            data["equipo_local"]     = str(c["equipo_local"]).strip()
+            data["equipo_visitante"] = str(c["equipo_visitante"]).strip()
+        if "marcador_real" in c:
+            data["marcador_real"] = c["marcador_real"]
+        if data:
+            batch.update(ref, data)
+            escritos += 1
+    if escritos:
+        batch.commit()
+        get_partidos.clear()
+        get_todos_pronosticos.clear()
+    return escritos
+
+
 def toggle_bloqueo_partido(partido_id: str, bloqueado: bool):
     """(Admin) Cambia el estado de bloqueo de un partido individual."""
     db = get_db()
@@ -175,6 +205,23 @@ def toggle_bloqueo_grupo(grupo: str, bloqueado: bool):
     batch = db.batch()
     for doc in docs:
         batch.update(doc.reference, {"bloqueado": bloqueado})
+    batch.commit()
+    get_partidos.clear()
+
+
+def toggle_bloqueo_jornada(jornada: int, bloqueado: bool):
+    """
+    (Admin) Bloquea o desbloquea todos los partidos de Grupos de una jornada.
+    Filtra la jornada en memoria para no requerir un índice compuesto en Firestore.
+    """
+    db = get_db()
+    docs = db.collection("partidos").where(
+        filter=FieldFilter("fase", "==", "Grupos")
+    ).stream()
+    batch = db.batch()
+    for doc in docs:
+        if doc.to_dict().get("jornada") == jornada:
+            batch.update(doc.reference, {"bloqueado": bloqueado})
     batch.commit()
     get_partidos.clear()
 
@@ -251,3 +298,34 @@ def guardar_pronostico(uid: str, partido_id: str, local: int, visitante: int):
     # Invalidar caché del usuario y ranking global
     get_pronosticos_usuario.clear()
     get_todos_pronosticos.clear()
+
+
+def guardar_pronosticos_batch(uid: str, predicciones: list[tuple]):
+    """
+    Guarda/actualiza en LOTE varios pronósticos de un usuario.
+
+    Args:
+        uid:          identificador del usuario.
+        predicciones: lista de tuplas (partido_id, local, visitante).
+
+    Returns:
+        int: cuántos pronósticos se escribieron.
+    """
+    db = get_db()
+    batch = db.batch()
+    escritos = 0
+    for partido_id, local, visitante in predicciones:
+        doc_id = f"{uid}_{partido_id}"
+        batch.set(db.collection("pronosticos").document(doc_id), {
+            "usuario_uid":          uid,
+            "partido_id":           partido_id,
+            "marcador":             {"local": int(local), "visitante": int(visitante)},
+            "ultima_actualizacion": datetime.now().isoformat(),
+        })
+        escritos += 1
+
+    if escritos:
+        batch.commit()
+        get_pronosticos_usuario.clear()
+        get_todos_pronosticos.clear()
+    return escritos
