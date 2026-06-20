@@ -59,11 +59,11 @@ def calcular_puntos(pronostico: dict, marcador_real: dict) -> int:
 
     # ── 3 puntos: Marcador exacto ─────────────────────────────────────────────
     if pron_local == real_local and pron_visitante == real_visitante:
-        return 3
+        return 5
 
     # ── 1 punto: Resultado correcto ───────────────────────────────────────────
     if _resultado(pron_local, pron_visitante) == _resultado(real_local, real_visitante):
-        return 1
+        return 3
 
     # ── 0 puntos: Sin acierto ─────────────────────────────────────────────────
     return 0
