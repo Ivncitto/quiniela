@@ -1,0 +1,53 @@
+# ─── Quiniela Familiar - .gitignore ─────────────────────────────────────────
+
+# ⚠️  IMPORTANTE: secrets.toml contiene tus credenciales de Firebase.
+#    NUNCA debe subirse a Git.
+.streamlit/secrets.toml
+
+# Credenciales de Firebase (si usas JSON directamente)
+*.json
+!package.json
+
+# Archivos de entorno
+.env
+.env.local
+.env.production
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Entornos virtuales
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage

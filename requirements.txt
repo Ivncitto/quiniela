@@ -1,0 +1,15 @@
+# ─── Quiniela - Dependencias ───────────────────────────────────────
+# Instalar con: pip install -r requirements.txt
+# Las versiones mínimas están indicadas; pip instalará la más reciente compatible.
+
+# Interfaz de usuario
+streamlit>=1.35.0
+
+# Firebase Admin SDK (Firestore)
+firebase-admin>=6.0.0
+
+# Manipulación de datos y tablas
+pandas>=2.0.0
+
+# Manejo de zonas horarias
+pytz>=2024.1
