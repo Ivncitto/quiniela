@@ -1,0 +1,10 @@
+[theme]
+# Tema oscuro nativo → st.dataframe y demás widgets de canvas
+# se pintan con colores oscuros nítidos en lugar del tema claro por defecto.
+base = "dark"
+primaryColor = "#4CAF50"
+backgroundColor = "#030f03"
+secondaryBackgroundColor = "#0b190b"
+textColor = "#E8F5E9"
+font = "sans serif"
+

@@ -29,7 +29,7 @@ st.set_page_config(
 )
 
 # ─── Importaciones de módulos propios ─────────────────────────────────────────
-from modules.auth import esta_autenticado, es_admin, logout
+from modules.auth import esta_autenticado, es_admin, logout, restaurar_sesion
 from modules.ui_login import mostrar_login
 from modules.ui_tabla_general import mostrar_tabla_general
 from modules.ui_puntos_grupos import mostrar_puntos_grupos
@@ -125,6 +125,20 @@ def _cargar_css():
             font-family: 'Inter', sans-serif !important;
         }
 
+        /* ── Iconos Material de Streamlit ─────────────────────────────────── */
+        /* IMPORTANTE: el override de fuente de arriba (span/*) rompe las
+           ligaduras de los iconos y los muestra como texto
+           ("keyboard_double_arrow_right", etc.). Aquí restauramos la fuente
+           de iconos para las flechas del sidebar, chevrons de expanders, etc. */
+        span[data-testid="stIconMaterial"],
+        [data-testid="stSidebar"] span[data-testid="stIconMaterial"],
+        [data-testid="stExpander"] span[data-testid="stIconMaterial"] {
+            font-family: 'Material Symbols Rounded' !important;
+        }
+        .material-icons          { font-family: 'Material Icons' !important; }
+        .material-symbols-rounded  { font-family: 'Material Symbols Rounded' !important; }
+        .material-symbols-outlined { font-family: 'Material Symbols Outlined' !important; }
+
         /* ── Botones principales ──────────────────────────────────────────── */
         .stButton > button {
             background: linear-gradient(135deg, #1B5E20, #2E7D32) !important;
@@ -190,13 +204,13 @@ def _cargar_css():
         }
 
         /* ── DataFrame / Tabla ────────────────────────────────────────────── */
+        /* El color de celdas/texto lo controla el tema dark de .streamlit/config.toml
+           (el grid se dibuja sobre <canvas> y no responde al CSS). Aquí solo
+           damos el borde y dejamos que el fondo oscuro nativo se vea sin velos. */
         [data-testid="stDataFrameResizable"] {
             border: 1px solid var(--borde-verde) !important;
             border-radius: 10px !important;
             overflow: hidden;
-        }
-        .dvn-scroller {
-            background: rgba(10, 20, 10, 0.6) !important;
         }
 
         /* ── Alerts ───────────────────────────────────────────────────────── */
@@ -353,6 +367,10 @@ def _renderizar_sidebar() -> str:
 def main():
     """Función principal: carga CSS, verifica auth y renderiza la página."""
     _cargar_css()
+
+    # Reabrir la sesión desde la cookie del dispositivo (si existe y es válida).
+    # Debe ir antes de comprobar la autenticación.
+    restaurar_sesion()
 
     # Si no está autenticado, mostrar pantalla de login
     if not esta_autenticado():
