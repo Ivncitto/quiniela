@@ -86,7 +86,7 @@ def calcular_ranking(
 
     Returns:
         DataFrame ordenado por puntos (descendente) con columnas:
-        Nombre, Puntos, Exactos (3pts), Parciales (1pt), Jugados.
+        Nombre, Puntos, Exactos (5pts), Parciales (3pts), Jugados.
     """
     # Mapa de partidos para búsqueda rápida: {partido_id: marcador_real}
     mapa_partidos: dict[str, dict] = {
@@ -119,9 +119,9 @@ def calcular_ranking(
             if marcador_real.get("local") is not None:
                 jugados += 1
                 puntos_total += pts
-                if pts == 3:
+                if pts == 5:
                     exactos += 1
-                elif pts == 1:
+                elif pts == 3:
                     parciales += 1
 
         filas.append({
@@ -196,9 +196,9 @@ def resumen_pronostico_usuario(
         if marcador_real.get("local") is not None:
             jugados += 1
             puntos_total += pts
-            if pts == 3:
+            if pts == 5:
                 exactos += 1
-            elif pts == 1:
+            elif pts == 3:
                 parciales += 1
 
     return {
