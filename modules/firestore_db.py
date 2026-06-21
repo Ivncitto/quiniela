@@ -272,93 +272,167 @@ def toggle_bloqueo_fase(fase: str, bloqueado: bool):
     get_partidos.clear()
 
 
-# ─── Pronósticos ──────────────────────────────────────────────────────────────
+# ─── Pronósticos (esquema: 1 documento por usuario) ──────────────────────────
+#
+#   pronosticos/{uid} = {
+#       "usuario_uid": uid,
+#       "marcadores":  { partido_id: {"local": int, "visitante": int}, ... },
+#       "ultima_actualizacion": iso,
+#   }
+#
+# Antes había 1 documento por (usuario, partido): leer el ranking escaneaba
+# MILES de documentos (1 lectura c/u). Ahora es 1 documento por usuario, así que
+# leer todos los pronósticos cuesta ~1 lectura por participante (reducción ~98%).
+
+
+def _doc_a_marcadores(data: dict) -> dict:
+    """
+    Extrae el mapa {partido_id: marcador} de un documento, soportando tanto el
+    esquema NUEVO (campo 'marcadores') como el VIEJO (1 doc por partido).
+    """
+    if "marcadores" in data:                      # esquema nuevo
+        return data.get("marcadores") or {}
+    if "partido_id" in data:                      # esquema viejo (compatibilidad)
+        return {data["partido_id"]: data.get("marcador", {})}
+    return {}
+
 
 @st.cache_data(ttl=300)
 def get_pronosticos_usuario(uid: str) -> dict[str, dict]:
     """
-    Retorna los pronósticos de un usuario específico como un dict.
-    Cacheado 5 minutos por uid; se invalida al guardar pronósticos.
-
-    Returns:
-        {partido_id: {"local": int, "visitante": int}}
+    Pronósticos de un usuario: {partido_id: {"local","visitante"}}.
+    Lee UN SOLO documento (pronosticos/{uid}) → 1 lectura.
     """
     db = get_db()
-    docs = list(db.collection("pronosticos").where(
-        filter=FieldFilter("usuario_uid", "==", uid)
-    ).stream())
-    _marca(len(docs), f"get_pronosticos_usuario({uid})")
-
-    resultado: dict[str, dict] = {}
-    for doc in docs:
-        data = doc.to_dict()
-        resultado[data["partido_id"]] = data.get("marcador", {})
-
-    return resultado
+    doc = db.collection("pronosticos").document(uid).get()
+    _marca(1, f"get_pronosticos_usuario({uid})")
+    if doc.exists:
+        return _doc_a_marcadores(doc.to_dict())
+    return {}
 
 
 @st.cache_data(ttl=300)
 def get_todos_pronosticos() -> list[dict]:
     """
-    Retorna TODOS los pronósticos de todos los usuarios.
-    Cacheado 5 minutos. Usado para calcular rankings.
+    TODOS los pronósticos en formato plano para el scoring:
+        [{"usuario_uid", "partido_id", "marcador"}].
 
-    OJO: escanea la colección COMPLETA → cada miss cuesta 1 lectura por
-    documento. Por eso la TTL es amplia y se invalida solo al guardar.
+    Con el esquema de 1 doc por usuario, cuesta ~1 lectura por participante.
+    Soporta también documentos del esquema viejo durante la transición.
     """
     db = get_db()
     docs = list(db.collection("pronosticos").stream())
-    _marca(len(docs), "get_todos_pronosticos (colección completa)")
-    return [doc.to_dict() for doc in docs]
+    _marca(len(docs), "get_todos_pronosticos")
+
+    # Dedup por (usuario, partido): si coexisten esquema viejo y nuevo durante
+    # la migración, evita contar el mismo pronóstico dos veces. El doc NUEVO
+    # (id == uid, sin '_') tiene prioridad sobre los viejos.
+    por_clave: dict[tuple, dict] = {}
+    for doc in docs:
+        data = doc.to_dict()
+        uid = data.get("usuario_uid", doc.id)
+        es_nuevo = "marcadores" in data
+        for pid, marcador in _doc_a_marcadores(data).items():
+            clave = (uid, pid)
+            if clave not in por_clave or es_nuevo:
+                por_clave[clave] = {"usuario_uid": uid, "partido_id": pid, "marcador": marcador}
+    return list(por_clave.values())
 
 
 def guardar_pronostico(uid: str, partido_id: str, local: int, visitante: int):
     """
-    Guarda o actualiza el pronóstico de un usuario para un partido.
-    Usa ID compuesto {uid}_{partido_id} para evitar duplicados.
-    Solo funciona si el partido está desbloqueado (validación en UI).
+    Guarda/actualiza UN pronóstico dentro del documento único del usuario.
+    Usa merge=True para no tocar los demás marcadores ya guardados.
     """
     db = get_db()
-    doc_id = f"{uid}_{partido_id}"
-
-    db.collection("pronosticos").document(doc_id).set({
-        "usuario_uid":         uid,
-        "partido_id":          partido_id,
-        "marcador":            {"local": local, "visitante": visitante},
+    db.collection("pronosticos").document(uid).set({
+        "usuario_uid":          uid,
+        "marcadores":           {partido_id: {"local": int(local), "visitante": int(visitante)}},
         "ultima_actualizacion": datetime.now().isoformat(),
-    })
+    }, merge=True)
 
-    # Invalidar caché del usuario y ranking global
     get_pronosticos_usuario.clear()
     get_todos_pronosticos.clear()
 
 
 def guardar_pronosticos_batch(uid: str, predicciones: list[tuple]):
     """
-    Guarda/actualiza en LOTE varios pronósticos de un usuario.
+    Guarda en LOTE varios pronósticos en UNA SOLA escritura (documento único).
 
     Args:
         uid:          identificador del usuario.
         predicciones: lista de tuplas (partido_id, local, visitante).
 
     Returns:
-        int: cuántos pronósticos se escribieron.
+        int: cuántos marcadores se escribieron.
+    """
+    if not predicciones:
+        return 0
+
+    db = get_db()
+    marcadores = {
+        pid: {"local": int(local), "visitante": int(visitante)}
+        for pid, local, visitante in predicciones
+    }
+    db.collection("pronosticos").document(uid).set({
+        "usuario_uid":          uid,
+        "marcadores":           marcadores,
+        "ultima_actualizacion": datetime.now().isoformat(),
+    }, merge=True)
+
+    get_pronosticos_usuario.clear()
+    get_todos_pronosticos.clear()
+    return len(marcadores)
+
+
+def migrar_pronosticos_a_documento_unico() -> dict:
+    """
+    (Admin, una sola vez) Migra el esquema VIEJO (1 doc por usuario+partido) al
+    NUEVO (1 doc por usuario con mapa 'marcadores'), y borra los documentos viejos.
+
+    Returns:
+        dict con {usuarios, leidos, borrados}.
     """
     db = get_db()
-    batch = db.batch()
-    escritos = 0
-    for partido_id, local, visitante in predicciones:
-        doc_id = f"{uid}_{partido_id}"
-        batch.set(db.collection("pronosticos").document(doc_id), {
-            "usuario_uid":          uid,
-            "partido_id":           partido_id,
-            "marcador":             {"local": int(local), "visitante": int(visitante)},
-            "ultima_actualizacion": datetime.now().isoformat(),
-        })
-        escritos += 1
+    docs = list(db.collection("pronosticos").stream())
 
-    if escritos:
+    por_uid: dict[str, dict] = {}     # uid -> {pid: marcador}
+    refs_viejos = []                  # documentos del esquema viejo a borrar
+
+    for doc in docs:
+        data = doc.to_dict()
+        if "partido_id" in data:                       # documento viejo
+            uid = data.get("usuario_uid")
+            if not uid:
+                continue
+            por_uid.setdefault(uid, {})[data["partido_id"]] = data.get("marcador", {})
+            refs_viejos.append(doc.reference)
+
+    # Escribir documentos consolidados (merge para no perder lo ya migrado)
+    for uid, marcadores in por_uid.items():
+        db.collection("pronosticos").document(uid).set({
+            "usuario_uid":          uid,
+            "marcadores":           marcadores,
+            "ultima_actualizacion": datetime.now().isoformat(),
+        }, merge=True)
+
+    # Borrar documentos viejos en lotes (máx 500 por batch de Firestore)
+    borrados = 0
+    batch = db.batch()
+    n = 0
+    for ref in refs_viejos:
+        if ref.id in por_uid:        # nunca borrar un doc nuevo (id == uid)
+            continue
+        batch.delete(ref)
+        n += 1
+        borrados += 1
+        if n >= 450:
+            batch.commit()
+            batch = db.batch()
+            n = 0
+    if n:
         batch.commit()
-        get_pronosticos_usuario.clear()
-        get_todos_pronosticos.clear()
-    return escritos
+
+    get_pronosticos_usuario.clear()
+    get_todos_pronosticos.clear()
+    return {"usuarios": len(por_uid), "leidos": len(docs), "borrados": borrados}
