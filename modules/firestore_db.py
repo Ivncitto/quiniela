@@ -30,6 +30,22 @@ except ImportError:
     from google.cloud.firestore_v1 import FieldFilter              # < 2.11
 
 
+# ─── Instrumentación de lecturas (auditoría de cuota) ─────────────────────────
+import logging
+
+logger = logging.getLogger("quiniela.firestore")
+
+# Contador de lecturas reales (por proceso del servidor). Cada función de lectura
+# llama a _marca() SOLO cuando ejecuta de verdad (no en aciertos de caché).
+LECTURAS = {"total": 0}
+
+
+def _marca(n: int, etiqueta: str) -> None:
+    """Registra n lecturas reales a Firestore para diagnóstico de cuota."""
+    LECTURAS["total"] += n
+    logger.info("FIRESTORE READ x%d · %s · total_proceso=%d", n, etiqueta, LECTURAS["total"])
+
+
 # ─── Inicialización del SDK (Singleton) ───────────────────────────────────────
 
 @st.cache_resource
@@ -67,10 +83,18 @@ def get_db():
 
 # ─── Usuarios ─────────────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=600)
 def get_usuario_por_uid(uid: str) -> dict | None:
-    """Obtiene el perfil de un usuario por su UID. Sin caché (uso en login)."""
+    """
+    Obtiene el perfil de un usuario por su UID.
+
+    CACHEADO 10 min: este documento casi nunca cambia y se consultaba en CADA
+    restauración de sesión / rerun, lo que disparaba decenas de miles de lecturas.
+    El caché se invalida explícitamente al crear/renombrar usuarios.
+    """
     db = get_db()
     doc = db.collection("usuarios").document(uid).get()
+    _marca(1, f"get_usuario_por_uid({uid})")
     if doc.exists:
         return doc.to_dict()
     return None
@@ -94,19 +118,21 @@ def crear_usuario_si_no_existe(uid: str, nombre: str) -> dict:
     }
     db.collection("usuarios").document(uid).set(perfil)
 
-    # Invalidar caché de usuarios
+    # Invalidar caché de usuarios (lista y documento individual)
     get_todos_los_usuarios.clear()
+    get_usuario_por_uid.clear()
     return perfil
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def get_todos_los_usuarios() -> list[dict]:
     """
     Retorna todos los usuarios registrados.
-    Cacheado 5 minutos (cambia poco frecuentemente).
+    Cacheado 1 hora (la lista de participantes casi nunca cambia).
     """
     db = get_db()
-    docs = db.collection("usuarios").stream()
+    docs = list(db.collection("usuarios").stream())
+    _marca(len(docs), "get_todos_los_usuarios")
     return [doc.to_dict() for doc in docs]
 
 
@@ -115,19 +141,21 @@ def actualizar_nombre_usuario(uid: str, nuevo_nombre: str):
     db = get_db()
     db.collection("usuarios").document(uid).update({"nombre": nuevo_nombre})
     get_todos_los_usuarios.clear()
+    get_usuario_por_uid.clear()
 
 
 # ─── Partidos ─────────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=600)
 def get_partidos() -> list[dict]:
     """
     Retorna todos los partidos ordenados por fecha.
-    Cacheado 60 segundos para reducir lecturas a Firestore.
-    Se invalida al actualizar marcadores o bloqueos.
+    Cacheado 10 minutos. Se invalida explícitamente al actualizar
+    marcadores o bloqueos, así que no hace falta una TTL corta.
     """
     db = get_db()
-    docs = db.collection("partidos").order_by("fecha").stream()
+    docs = list(db.collection("partidos").order_by("fecha").stream())
+    _marca(len(docs), "get_partidos")
     partidos = []
     for doc in docs:
         partido = doc.to_dict()
@@ -246,19 +274,20 @@ def toggle_bloqueo_fase(fase: str, bloqueado: bool):
 
 # ─── Pronósticos ──────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def get_pronosticos_usuario(uid: str) -> dict[str, dict]:
     """
     Retorna los pronósticos de un usuario específico como un dict.
-    Cacheado 30 segundos por uid.
+    Cacheado 5 minutos por uid; se invalida al guardar pronósticos.
 
     Returns:
         {partido_id: {"local": int, "visitante": int}}
     """
     db = get_db()
-    docs = db.collection("pronosticos").where(
+    docs = list(db.collection("pronosticos").where(
         filter=FieldFilter("usuario_uid", "==", uid)
-    ).stream()
+    ).stream())
+    _marca(len(docs), f"get_pronosticos_usuario({uid})")
 
     resultado: dict[str, dict] = {}
     for doc in docs:
@@ -268,14 +297,18 @@ def get_pronosticos_usuario(uid: str) -> dict[str, dict]:
     return resultado
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def get_todos_pronosticos() -> list[dict]:
     """
     Retorna TODOS los pronósticos de todos los usuarios.
-    Cacheado 30 segundos. Usado para calcular rankings.
+    Cacheado 5 minutos. Usado para calcular rankings.
+
+    OJO: escanea la colección COMPLETA → cada miss cuesta 1 lectura por
+    documento. Por eso la TTL es amplia y se invalida solo al guardar.
     """
     db = get_db()
-    docs = db.collection("pronosticos").stream()
+    docs = list(db.collection("pronosticos").stream())
+    _marca(len(docs), "get_todos_pronosticos (colección completa)")
     return [doc.to_dict() for doc in docs]
 
 

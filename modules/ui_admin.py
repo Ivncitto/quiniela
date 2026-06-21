@@ -393,3 +393,8 @@ def mostrar_panel_admin():
     if st.button("🔄 Recargar desde Firestore", key="adm_refresh"):
         get_partidos.clear()
         st.rerun()
+
+    # ── Instrumentación: lecturas reales a Firestore en este proceso ───────────
+    from modules.firestore_db import LECTURAS
+    st.caption(f"🔎 Lecturas reales a Firestore en este proceso del servidor: **{LECTURAS['total']}** "
+               "(no cuenta los aciertos de caché). Útil para auditar la cuota.")
