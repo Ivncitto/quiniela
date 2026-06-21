@@ -10,6 +10,8 @@ Diseño:
   - Bloqueo/desbloqueo individual y de toda la fase.
 """
 
+import json
+
 import streamlit as st
 from datetime import datetime
 
@@ -399,6 +401,8 @@ def mostrar_panel_admin():
         LECTURAS,
         migrar_pronosticos_a_documento_unico,
         reconstruir_agregado_partidos,
+        exportar_backup,
+        get_partidos,
     )
     st.caption(f"🔎 Lecturas reales a Firestore en este proceso del servidor: **{LECTURAS['total']}** "
                "(no cuenta los aciertos de caché). Útil para auditar la cuota.")
@@ -430,3 +434,42 @@ def mostrar_panel_admin():
                 n = reconstruir_agregado_partidos()
             st.success(f"✅ Agregado reconstruido con {n} partidos.")
             st.rerun()
+
+        st.markdown("---")
+        st.markdown(
+            "**3) Descargar respaldo (JSON).** Lee la base **una vez** y arma un "
+            "backup: 1 entrada por persona con **todos los partidos** (los que no "
+            "pronosticó quedan en `null`) + `meta-partidos`. Hazlo **antes de migrar**."
+        )
+        if st.button("📦 Preparar respaldo (lee la BD una vez)", key="adm_prep_backup"):
+            with st.spinner("Leyendo y consolidando la base..."):
+                backup = exportar_backup()
+            st.session_state["_backup_json"] = json.dumps(backup, ensure_ascii=False, indent=2)
+            st.session_state["_backup_partidos_json"] = json.dumps(
+                backup["meta_partidos"], ensure_ascii=False, indent=2
+            )
+            st.success(
+                f"✅ Respaldo listo: {len(backup['pronosticos'])} personas · "
+                f"{len(backup['meta_partidos'])} partidos."
+            )
+
+        if st.session_state.get("_backup_json"):
+            cda, cdb = st.columns(2)
+            with cda:
+                st.download_button(
+                    "⬇️ Respaldo completo (pronósticos + partidos)",
+                    data=st.session_state["_backup_json"],
+                    file_name="quiniela_backup.json",
+                    mime="application/json",
+                    key="adm_dl_backup",
+                    use_container_width=True,
+                )
+            with cdb:
+                st.download_button(
+                    "⬇️ Solo meta-partidos",
+                    data=st.session_state["_backup_partidos_json"],
+                    file_name="meta_partidos.json",
+                    mime="application/json",
+                    key="adm_dl_partidos",
+                    use_container_width=True,
+                )

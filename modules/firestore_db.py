@@ -450,6 +450,56 @@ def guardar_pronosticos_batch(uid: str, predicciones: list[tuple]):
     return len(marcadores)
 
 
+def exportar_backup() -> dict:
+    """
+    (Admin) Lee TODO una vez y arma un backup consolidado para descargar como JSON:
+
+      {
+        "exportado": iso,
+        "meta_partidos": [ {…partido…}, ... ],
+        "pronosticos": {
+            uid: {
+                "nombre": str,
+                "marcadores": { partido_id: {"local","visitante"} | null, ... }  ← TODOS los partidos
+            }, ...
+        }
+      }
+
+    Cada usuario incluye TODOS los partidos (formato de meta-partidos); los
+    partidos sin pronóstico quedan en null. Es 1 "json por persona" dentro del
+    objeto 'pronosticos'.
+    """
+    partidos = get_partidos()                  # 1 lectura (agregado)
+    usuarios = get_todos_los_usuarios()        # cacheado
+    todos    = get_todos_pronosticos()         # consolidado (o fallback viejo)
+
+    # Indexar pronósticos por usuario
+    por_uid: dict[str, dict] = {}
+    for pr in todos:
+        por_uid.setdefault(pr["usuario_uid"], {})[pr["partido_id"]] = pr.get("marcador", {})
+
+    ids_partidos   = [p["id"] for p in partidos]
+    nombre_por_uid = {u.get("uid", ""): u.get("nombre", u.get("uid", "")) for u in usuarios}
+
+    pronosticos_export: dict[str, dict] = {}
+    uids = set(nombre_por_uid) | set(por_uid)
+    for uid in sorted(uids):
+        if not uid:
+            continue
+        marc_usuario = por_uid.get(uid, {})
+        completo = {pid: marc_usuario.get(pid) for pid in ids_partidos}   # None si falta
+        pronosticos_export[uid] = {
+            "nombre":     nombre_por_uid.get(uid, uid),
+            "marcadores": completo,
+        }
+
+    return {
+        "exportado":     datetime.now().isoformat(),
+        "meta_partidos": partidos,
+        "pronosticos":   pronosticos_export,
+    }
+
+
 def migrar_pronosticos_a_documento_unico() -> dict:
     """
     (Admin, una sola vez) Migra el esquema VIEJO (1 doc por usuario+partido) al
