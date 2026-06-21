@@ -16,6 +16,7 @@ Las funciones de escritura llaman a .clear() de las funciones
 de lectura afectadas para evitar datos stale.
 """
 
+import copy
 from datetime import datetime
 
 import firebase_admin
@@ -144,132 +145,177 @@ def actualizar_nombre_usuario(uid: str, nuevo_nombre: str):
     get_usuario_por_uid.clear()
 
 
-# ─── Partidos ─────────────────────────────────────────────────────────────────
+# ─── Partidos (esquema: 1 documento agregado) ────────────────────────────────
+#
+#   meta/partidos = {"lista": [ {…partido con id…}, ... ], "actualizado": iso}
+#
+# Antes había 1 documento por partido (104) → cada lectura costaba 104. Ahora se
+# lee UN SOLO documento (1 lectura). Las escrituras del admin modifican la lista
+# en memoria (desde caché, 0 lecturas extra) y reescriben ese único documento.
+
+_META_COL = "meta"
+_META_PARTIDOS_DOC = "partidos"
+
+
+def _escribir_lista_partidos(lista: list[dict]) -> None:
+    """Reescribe el documento agregado de partidos e invalida la caché."""
+    db = get_db()
+    db.collection(_META_COL).document(_META_PARTIDOS_DOC).set({
+        "lista":       lista,
+        "actualizado": datetime.now().isoformat(),
+    })
+    get_partidos.clear()
+
 
 @st.cache_data(ttl=600)
 def get_partidos() -> list[dict]:
     """
-    Retorna todos los partidos ordenados por fecha.
-    Cacheado 10 minutos. Se invalida explícitamente al actualizar
-    marcadores o bloqueos, así que no hace falta una TTL corta.
+    Lista de partidos ordenada por fecha, leída del documento agregado (1 lectura).
+
+    Si el agregado aún no existe (primera vez tras sembrar datos), lo reconstruye
+    desde la colección 'partidos' una sola vez y lo guarda.
     """
     db = get_db()
-    docs = list(db.collection("partidos").order_by("fecha").stream())
-    _marca(len(docs), "get_partidos")
-    partidos = []
-    for doc in docs:
-        partido = doc.to_dict()
-        partido["id"] = doc.id   # Incluir el ID del documento
-        partidos.append(partido)
-    return partidos
+    doc = db.collection(_META_COL).document(_META_PARTIDOS_DOC).get()
+    _marca(1, "get_partidos (agregado)")
+
+    if doc.exists and isinstance(doc.to_dict().get("lista"), list):
+        lista = doc.to_dict()["lista"]
+    else:
+        # Migración perezosa desde la colección individual
+        docs = list(db.collection("partidos").order_by("fecha").stream())
+        _marca(len(docs), "get_partidos (reconstrucción desde colección)")
+        lista = []
+        for d in docs:
+            p = d.to_dict()
+            p["id"] = d.id
+            lista.append(p)
+        if lista:
+            _escribir_lista_partidos(lista)
+
+    return sorted(lista, key=lambda p: p.get("fecha", ""))
+
+
+def _modificar_partidos(fn) -> int:
+    """
+    Aplica fn(partido)->bool a cada partido (sobre una COPIA de la lista cacheada)
+    y reescribe el agregado si hubo cambios. 0 lecturas extra (usa caché).
+    Devuelve cuántos partidos cambiaron.
+    """
+    lista = copy.deepcopy(get_partidos())
+    cambiados = 0
+    for p in lista:
+        if fn(p):
+            cambiados += 1
+    if cambiados:
+        _escribir_lista_partidos(lista)
+    return cambiados
 
 
 def actualizar_marcador_real(partido_id: str, local: int, visitante: int):
-    """
-    (Admin) Actualiza el marcador real de un partido.
-    Invalida el caché de partidos y pronósticos.
-    """
-    db = get_db()
-    db.collection("partidos").document(partido_id).update({
-        "marcador_real": {"local": local, "visitante": visitante}
-    })
-    get_partidos.clear()
-    get_todos_pronosticos.clear()
+    """(Admin) Actualiza el marcador real de un partido en el agregado."""
+    def _f(p):
+        if p.get("id") == partido_id:
+            p["marcador_real"] = {"local": local, "visitante": visitante}
+            return True
+        return False
+    _modificar_partidos(_f)
 
 
 def guardar_partidos_batch(cambios: list[dict]):
     """
-    (Admin) Guarda en LOTE nombres y/o marcadores de varios partidos.
+    (Admin) Guarda en LOTE nombres y/o marcadores de varios partidos en UNA sola
+    escritura del documento agregado.
 
     Args:
-        cambios: lista de dicts. Cada uno debe tener "id" y opcionalmente
+        cambios: lista de dicts con "id" y opcionalmente
                  "equipo_local"+"equipo_visitante" y/o "marcador_real".
-                 Solo se escriben los campos presentes.
     """
-    db = get_db()
-    batch = db.batch()
-    escritos = 0
-    for c in cambios:
-        ref  = db.collection("partidos").document(c["id"])
-        data = {}
+    por_id = {c["id"]: c for c in cambios}
+
+    def _f(p):
+        c = por_id.get(p.get("id"))
+        if not c:
+            return False
+        tocado = False
         if "equipo_local" in c and "equipo_visitante" in c:
-            data["equipo_local"]     = str(c["equipo_local"]).strip()
-            data["equipo_visitante"] = str(c["equipo_visitante"]).strip()
+            p["equipo_local"]     = str(c["equipo_local"]).strip()
+            p["equipo_visitante"] = str(c["equipo_visitante"]).strip()
+            tocado = True
         if "marcador_real" in c:
-            data["marcador_real"] = c["marcador_real"]
-        if data:
-            batch.update(ref, data)
-            escritos += 1
-    if escritos:
-        batch.commit()
-        get_partidos.clear()
-        get_todos_pronosticos.clear()
-    return escritos
+            p["marcador_real"] = c["marcador_real"]
+            tocado = True
+        return tocado
+
+    return _modificar_partidos(_f)
 
 
 def toggle_bloqueo_partido(partido_id: str, bloqueado: bool):
     """(Admin) Cambia el estado de bloqueo de un partido individual."""
-    db = get_db()
-    db.collection("partidos").document(partido_id).update({"bloqueado": bloqueado})
-    get_partidos.clear()
+    def _f(p):
+        if p.get("id") == partido_id:
+            p["bloqueado"] = bloqueado
+            return True
+        return False
+    _modificar_partidos(_f)
 
 
 def actualizar_equipos_partido(partido_id: str, equipo_local: str, equipo_visitante: str):
-    """(Admin) Actualiza los nombres de los equipos de un partido (útil en eliminatorias)."""
-    db = get_db()
-    db.collection("partidos").document(partido_id).update({
-        "equipo_local":     equipo_local.strip(),
-        "equipo_visitante": equipo_visitante.strip(),
-    })
-    get_partidos.clear()
+    """(Admin) Actualiza los nombres de los equipos de un partido."""
+    def _f(p):
+        if p.get("id") == partido_id:
+            p["equipo_local"]     = equipo_local.strip()
+            p["equipo_visitante"] = equipo_visitante.strip()
+            return True
+        return False
+    _modificar_partidos(_f)
 
 
 def toggle_bloqueo_grupo(grupo: str, bloqueado: bool):
-    """(Admin) Bloquea o desbloquea todos los partidos de un grupo específico."""
-    db = get_db()
-    docs = db.collection("partidos").where(
-        filter=FieldFilter("grupo", "==", grupo)
-    ).stream()
-    batch = db.batch()
-    for doc in docs:
-        batch.update(doc.reference, {"bloqueado": bloqueado})
-    batch.commit()
-    get_partidos.clear()
+    """(Admin) Bloquea o desbloquea todos los partidos de un grupo."""
+    def _f(p):
+        if p.get("grupo") == grupo:
+            p["bloqueado"] = bloqueado
+            return True
+        return False
+    _modificar_partidos(_f)
 
 
 def toggle_bloqueo_jornada(jornada: int, bloqueado: bool):
-    """
-    (Admin) Bloquea o desbloquea todos los partidos de Grupos de una jornada.
-    Filtra la jornada en memoria para no requerir un índice compuesto en Firestore.
-    """
-    db = get_db()
-    docs = db.collection("partidos").where(
-        filter=FieldFilter("fase", "==", "Grupos")
-    ).stream()
-    batch = db.batch()
-    for doc in docs:
-        if doc.to_dict().get("jornada") == jornada:
-            batch.update(doc.reference, {"bloqueado": bloqueado})
-    batch.commit()
-    get_partidos.clear()
+    """(Admin) Bloquea o desbloquea todos los partidos de Grupos de una jornada."""
+    def _f(p):
+        if p.get("fase") == "Grupos" and p.get("jornada") == jornada:
+            p["bloqueado"] = bloqueado
+            return True
+        return False
+    _modificar_partidos(_f)
 
 
 def toggle_bloqueo_fase(fase: str, bloqueado: bool):
+    """(Admin) Bloquea o desbloquea TODOS los partidos de una fase."""
+    def _f(p):
+        if p.get("fase") == fase:
+            p["bloqueado"] = bloqueado
+            return True
+        return False
+    _modificar_partidos(_f)
+
+
+def reconstruir_agregado_partidos() -> int:
     """
-    (Admin) Bloquea o desbloquea TODOS los partidos de una fase de una vez.
-    Usa batch write para eficiencia.
+    (Admin) Reconstruye meta/partidos desde la colección 'partidos'.
+    Úsalo si volviste a sembrar datos (seed) y el agregado quedó desactualizado.
     """
     db = get_db()
-    docs = db.collection("partidos").where(
-        filter=FieldFilter("fase", "==", fase)
-    ).stream()
-
-    batch = db.batch()
-    for doc in docs:
-        batch.update(doc.reference, {"bloqueado": bloqueado})
-    batch.commit()
-
-    get_partidos.clear()
+    docs = list(db.collection("partidos").order_by("fecha").stream())
+    _marca(len(docs), "reconstruir_agregado_partidos")
+    lista = []
+    for d in docs:
+        p = d.to_dict()
+        p["id"] = d.id
+        lista.append(p)
+    _escribir_lista_partidos(lista)
+    return len(lista)
 
 
 # ─── Pronósticos (esquema: 1 documento por usuario) ──────────────────────────
@@ -302,12 +348,31 @@ def get_pronosticos_usuario(uid: str) -> dict[str, dict]:
     """
     Pronósticos de un usuario: {partido_id: {"local","visitante"}}.
     Lee UN SOLO documento (pronosticos/{uid}) → 1 lectura.
+
+    Fallback: si el documento único aún no existe (datos sin migrar), lee el
+    esquema viejo (1 doc por partido) para que los datos sigan cargando.
     """
     db = get_db()
     doc = db.collection("pronosticos").document(uid).get()
     _marca(1, f"get_pronosticos_usuario({uid})")
     if doc.exists:
-        return _doc_a_marcadores(doc.to_dict())
+        marcadores = _doc_a_marcadores(doc.to_dict())
+        if marcadores:
+            return marcadores
+
+    # ── Fallback al esquema viejo (sólo antes de migrar) ──────────────────────
+    viejos = list(db.collection("pronosticos").where(
+        filter=FieldFilter("usuario_uid", "==", uid)
+    ).stream())
+    if viejos:
+        _marca(len(viejos), f"get_pronosticos_usuario fallback viejo({uid})")
+        resultado: dict[str, dict] = {}
+        for d in viejos:
+            data = d.to_dict()
+            if "partido_id" in data:
+                resultado[data["partido_id"]] = data.get("marcador", {})
+        return resultado
+
     return {}
 
 

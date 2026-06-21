@@ -395,19 +395,21 @@ def mostrar_panel_admin():
         st.rerun()
 
     # ── Instrumentación: lecturas reales a Firestore en este proceso ───────────
-    from modules.firestore_db import LECTURAS, migrar_pronosticos_a_documento_unico
+    from modules.firestore_db import (
+        LECTURAS,
+        migrar_pronosticos_a_documento_unico,
+        reconstruir_agregado_partidos,
+    )
     st.caption(f"🔎 Lecturas reales a Firestore en este proceso del servidor: **{LECTURAS['total']}** "
                "(no cuenta los aciertos de caché). Útil para auditar la cuota.")
 
     # ── Optimización de base de datos (migración única) ────────────────────────
     with st.expander("🛠️ Optimizar base de datos (reducir lecturas de Firestore)"):
         st.markdown(
-            "Convierte los pronósticos de **1 documento por partido** a "
-            "**1 documento por usuario**. Esto reduce las lecturas del ranking de "
-            "~miles a ~1 por participante. **Se ejecuta una sola vez.**"
+            "**1) Pronósticos → 1 documento por usuario.** Convierte los pronósticos "
+            "de *1 documento por partido* a *1 por usuario* (≈13). El ranking pasa de "
+            "leer ~miles de documentos a ~1 por participante. **Se ejecuta una sola vez.**"
         )
-        st.warning("Hazlo cuando la cuota esté disponible. Lee la colección completa una vez "
-                   "(costo puntual) y luego borra los documentos viejos.")
         if st.button("🚀 Migrar pronósticos ahora", key="adm_migrar"):
             with st.spinner("Migrando pronósticos a documento único..."):
                 res = migrar_pronosticos_a_documento_unico()
@@ -415,4 +417,16 @@ def mostrar_panel_admin():
                 f"✅ Migración completa · {res['usuarios']} usuarios · "
                 f"{res['leidos']} documentos leídos · {res['borrados']} viejos borrados."
             )
+            st.rerun()
+
+        st.markdown("---")
+        st.markdown(
+            "**2) Partidos → 1 documento agregado.** El agregado se crea solo al "
+            "leer; usa este botón solo si **volviste a sembrar** los partidos (seed) "
+            "y necesitas refrescar el agregado."
+        )
+        if st.button("🔁 Reconstruir agregado de partidos", key="adm_reconstruir_partidos"):
+            with st.spinner("Reconstruyendo lista de partidos..."):
+                n = reconstruir_agregado_partidos()
+            st.success(f"✅ Agregado reconstruido con {n} partidos.")
             st.rerun()
