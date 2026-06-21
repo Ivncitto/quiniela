@@ -402,7 +402,6 @@ def mostrar_panel_admin():
         migrar_pronosticos_a_documento_unico,
         reconstruir_agregado_partidos,
         exportar_backup,
-        get_partidos,
     )
     st.caption(f"🔎 Lecturas reales a Firestore en este proceso del servidor: **{LECTURAS['total']}** "
                "(no cuenta los aciertos de caché). Útil para auditar la cuota.")
