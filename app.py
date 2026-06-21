@@ -34,6 +34,7 @@ from modules.ui_login import mostrar_login
 from modules.ui_tabla_general import mostrar_tabla_general
 from modules.ui_puntos_grupos import mostrar_puntos_grupos
 from modules.ui_tablero import mostrar_tablero
+from modules.ui_quinielas_otros import mostrar_quinielas_otros
 from modules.ui_admin import mostrar_panel_admin
 
 
@@ -336,6 +337,7 @@ def _renderizar_sidebar() -> str:
             "🏆 Tabla General",
             "📊 Puntos por Fase",
             "📋 Mi Tablero",
+            "🔍 Quinielas de Todos",
         ]
         if es_admin():
             opciones.append("⚙️ Panel Admin")
@@ -389,6 +391,9 @@ def main():
 
     elif pagina == "📋 Mi Tablero":
         mostrar_tablero()
+
+    elif pagina == "🔍 Quinielas de Todos":
+        mostrar_quinielas_otros()
 
     elif pagina == "⚙️ Panel Admin":
         # Doble verificación: solo admin puede acceder
