@@ -69,8 +69,8 @@ def mostrar_tabla_general():
         column_config={
             "Nombre":        st.column_config.TextColumn("👤 Nombre",         width="medium"),
             "Puntos":        st.column_config.NumberColumn("🏆 Puntos Totales", width="small", format="%d"),
-            "🎯 Exactos":    st.column_config.NumberColumn("🎯 Exactos (3pts)", width="small", format="%d"),
-            "✅ Parciales":  st.column_config.NumberColumn("✅ Parciales (1pt)", width="small", format="%d"),
+            "🎯 Exactos":    st.column_config.NumberColumn("🎯 Exactos (5pts)", width="small", format="%d"),
+            "✅ Parciales":  st.column_config.NumberColumn("✅ Parciales (3pts)", width="small", format="%d"),
             "⚽ Jugados":    st.column_config.NumberColumn("⚽ Jugados",         width="small", format="%d"),
         },
         hide_index=False,
