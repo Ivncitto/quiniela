@@ -6,6 +6,67 @@ Muestra el ranking de todos los familiares ordenado por puntos totales.
 import streamlit as st
 from modules.firestore_db import get_todos_los_usuarios, get_todos_pronosticos, get_partidos
 from modules.scoring import calcular_ranking
+from modules.horario import partidos_de_hoy, estado_partido, kickoff_local
+
+
+# ── Estilos de cada estado del partido del día ────────────────────────────────
+_ESTADOS = {
+    "FINAL":     ("Final",        "#66BB6A", "rgba(76,175,80,0.12)"),
+    "EN_JUEGO":  ("● En juego",   "#FFD54F", "rgba(255,193,7,0.12)"),
+    "PROXIMO":   ("Próximo",      "rgba(200,230,200,0.55)", "rgba(255,255,255,0.04)"),
+    "PENDIENTE": ("Por capturar", "#FFAB91", "rgba(255,112,67,0.10)"),
+    "SIN_FECHA": ("—",            "rgba(200,230,200,0.4)", "rgba(255,255,255,0.04)"),
+}
+
+
+def _panel_partidos_hoy(partidos: list[dict]) -> None:
+    """Muestra los partidos de HOY con su marcador y estado (sin consultar APIs)."""
+    de_hoy = partidos_de_hoy(partidos)
+    if not de_hoy:
+        return  # No hay partidos hoy: no mostramos el bloque.
+
+    st.markdown(
+        '<h3 style="margin:0 0 0.6rem;">📅 Partidos de hoy</h3>',
+        unsafe_allow_html=True,
+    )
+
+    for p in de_hoy:
+        estado = estado_partido(p)
+        etiqueta, color, bg = _ESTADOS.get(estado, _ESTADOS["SIN_FECHA"])
+
+        kickoff = kickoff_local(p)
+        hora = kickoff.strftime("%H:%M") if kickoff else "--:--"
+
+        e_local = p.get("equipo_local", "Por definir")
+        e_vis   = p.get("equipo_visitante", "Por definir")
+
+        mr = p.get("marcador_real", {})
+        if mr.get("local") is not None:
+            centro = f'{int(mr["local"])} <span style="opacity:.45;">–</span> {int(mr["visitante"])}'
+        else:
+            centro = '<span style="opacity:.4;">vs</span>'
+
+        st.markdown(
+            f'''
+            <div style="display:flex; align-items:center; gap:8px;
+                        background:{bg}; border:1px solid rgba(76,175,80,0.15);
+                        border-radius:10px; padding:0.45rem 0.7rem; margin-bottom:0.4rem;">
+                <div style="width:48px; font-size:0.8rem; color:rgba(200,230,200,0.6);
+                            font-weight:600;">{hora}</div>
+                <div style="flex:1; text-align:right; font-weight:600;
+                            font-size:0.92rem;">{e_local}</div>
+                <div style="min-width:54px; text-align:center; font-weight:800;
+                            font-size:1.05rem; color:#E8F5E9;">{centro}</div>
+                <div style="flex:1; text-align:left; font-weight:600;
+                            font-size:0.92rem;">{e_vis}</div>
+                <div style="width:96px; text-align:right; font-size:0.72rem;
+                            font-weight:700; color:{color};">{etiqueta}</div>
+            </div>
+            ''',
+            unsafe_allow_html=True,
+        )
+
+    st.divider()
 
 
 def mostrar_tabla_general():
@@ -26,6 +87,9 @@ def mostrar_tabla_general():
         usuarios    = get_todos_los_usuarios()
         pronosticos = get_todos_pronosticos()
         partidos    = get_partidos()
+
+    # ── Partidos de hoy (lee la BD, sin consultar APIs) ───────────────────────
+    _panel_partidos_hoy(partidos)
 
     if not usuarios:
         st.info("Aún no hay usuarios registrados en el torneo.")

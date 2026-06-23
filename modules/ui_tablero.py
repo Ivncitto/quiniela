@@ -17,6 +17,7 @@ from modules.firestore_db import (
     get_pronosticos_usuario,
     guardar_pronosticos_batch,
 )
+from modules.horario import esta_cerrado, formatear_fecha_local
 
 _ORDEN_FASES = [
     "Grupos", "16avos", "Octavos", "Cuartos",
@@ -85,14 +86,8 @@ _CSS = """
 
 
 def _fmt_fecha(fecha_iso: str) -> str:
-    """Formatea fecha ISO a 'Lun 11 Jun · 19:00'."""
-    try:
-        dt = datetime.fromisoformat(fecha_iso)
-        dias = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"]
-        meses = ["","Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
-        return f"{dias[dt.weekday()]} {dt.day} {meses[dt.month]} · {dt.strftime('%H:%M')}"
-    except Exception:
-        return fecha_iso[:16] if len(fecha_iso) >= 16 else fecha_iso
+    """Formatea fecha ISO (UTC) a hora local de México: 'Lun 11 Jun · 13:00'."""
+    return formatear_fecha_local(fecha_iso)
 
 
 def _partido_card(partido: dict, uid: str, mis_pronosticos: dict) -> None:
@@ -100,7 +95,8 @@ def _partido_card(partido: dict, uid: str, mis_pronosticos: dict) -> None:
     pid          = partido["id"]
     e_local      = partido.get("equipo_local",     "Por definir")
     e_visitante  = partido.get("equipo_visitante",  "Por definir")
-    bloqueado    = partido.get("bloqueado",          False)
+    # Cerrado = bloqueo manual del admin O ya llegó la hora de inicio.
+    bloqueado    = esta_cerrado(partido)
     fecha_iso    = partido.get("fecha",              "")
     ciudad       = partido.get("ciudad",             "")
     estadio      = partido.get("estadio",            "")
@@ -248,7 +244,7 @@ def _guardar_todos_pronosticos(uid: str, partidos: list[dict], mis_pronosticos: 
     """
     predicciones = []
     for partido in partidos:
-        if partido.get("bloqueado", False):
+        if esta_cerrado(partido):
             continue
         pid  = partido["id"]
         k_sl = f"tb_sl_{pid}"
@@ -307,8 +303,8 @@ def mostrar_tablero():
     # ── Métricas rápidas ──────────────────────────────────────────────────────
     total        = len(partidos)
     pronosticados = len(mis_pronosticos)
-    pendientes   = sum(1 for p in partidos if not p.get("bloqueado", False) and p["id"] not in mis_pronosticos)
-    bloqueados   = sum(1 for p in partidos if p.get("bloqueado", False))
+    pendientes   = sum(1 for p in partidos if not esta_cerrado(p) and p["id"] not in mis_pronosticos)
+    bloqueados   = sum(1 for p in partidos if esta_cerrado(p))
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("⚽ Partidos",      total)

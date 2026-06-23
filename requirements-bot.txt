@@ -1,0 +1,5 @@
+# Dependencias SOLO del robot de resultados (GitHub Actions).
+# Ligero a propósito: no incluye Streamlit ni UI.
+requests>=2.31.0
+firebase-admin>=6.0.0
+pytz>=2024.1

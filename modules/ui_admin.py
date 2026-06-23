@@ -224,14 +224,9 @@ def _boton_guardar_todo(lista: list[dict], key: str) -> None:
 
 
 def _fmt_fecha_corta(fecha_iso: str) -> str:
-    """Formatea fecha ISO a 'Jue 11 Jun · 19:00' para el separador cronológico."""
-    try:
-        dt = datetime.fromisoformat(fecha_iso)
-        dias  = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
-        meses = ["", "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
-        return f"{dias[dt.weekday()]} {dt.day} {meses[dt.month]} · {dt.strftime('%H:%M')}"
-    except Exception:
-        return fecha_iso[:16] if len(fecha_iso) >= 16 else fecha_iso
+    """Formatea fecha ISO (UTC) a hora local de México: 'Jue 11 Jun · 13:00'."""
+    from modules.horario import formatear_fecha_local
+    return formatear_fecha_local(fecha_iso)
 
 
 def _tab_grupos(partidos: list[dict]) -> None:

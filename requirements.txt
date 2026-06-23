@@ -16,3 +16,6 @@ pandas>=2.0.0
 
 # Manejo de zonas horarias
 pytz>=2024.1
+
+# Cliente HTTP para el robot de resultados (football-data.org)
+requests>=2.31.0

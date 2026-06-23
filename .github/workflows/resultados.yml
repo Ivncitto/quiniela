@@ -1,0 +1,49 @@
+name: Actualizar marcadores
+
+# Robot que jala resultados del Mundial (football-data.org) y los escribe en
+# Firestore. El propio script decide si llama o no a la API (solo cuando hay
+# algo de la fecha en curso que revisar), así que la mayoría de las corridas
+# salen sin gastar ninguna llamada.
+#
+# FRANJA DEL CRON (acordada con los horarios reales de los partidos):
+#   Los partidos inician entre 10:00 y 22:00 hora de México. El último arranca a
+#   las 22:00 MX y su resultado se capta poco después de medianoche, así que la
+#   franja activa es de 12:00 a 01:00 MX; el resto (01:00–11:59 MX) está apagado.
+#   En UTC (México = UTC−6) eso equivale a las horas 0–6 y 18–23.
+#   → Si en una revisión futura cambian mucho los horarios, recalcula la franja.
+#
+# ⚠️ MINUTOS DE GITHUB ACTIONS (no es la cuota de la API):
+#   En repo PRIVADO el plan gratis da 2,000 min/mes. Aun con la franja recortada,
+#   si te quedas corto sube el intervalo a "*/10", o haz el repo público
+#   (Actions ilimitado en repos públicos; aquí NO se sube ningún secreto).
+
+on:
+  schedule:
+    # cada 5 min, solo en la franja con partidos: 12:00–01:00 MX = UTC 0–6 y 18–23
+    - cron: "*/5 0-6,18-23 * * *"
+  workflow_dispatch:         # permite ejecutarlo a mano desde la pestaña Actions
+
+concurrency:
+  group: actualizar-marcadores
+  cancel-in-progress: false  # no cortar una corrida a medias
+
+jobs:
+  actualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependencias del robot
+        run: pip install -r requirements-bot.txt
+
+      - name: Ejecutar robot de resultados
+        env:
+          FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+          FIREBASE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_CREDENTIALS_JSON }}
+        run: python actualizar_resultados.py
