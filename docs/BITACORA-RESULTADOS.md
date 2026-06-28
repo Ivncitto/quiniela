@@ -84,6 +84,13 @@ los partidos del rango. Nunca re-revisa partidos ya finalizados.
 Aquí es donde hay que poner atención, porque el emparejado es por orden, no por
 equipos. Pasos:
 
+0. **RESPALDA PRIMERO** (red de seguridad, antes de cada ronda):
+   ```powershell
+   python scripts/backup_firestore.py
+   ```
+   Guarda `backups/quiniela_backup_<fecha>.json` con partidos + pronósticos +
+   usuarios. Si algo sale mal, se restaura (ver §6). El robot solo escribe
+   `meta/partidos` y NUNCA toca los pronósticos, pero el respaldo cubre todo.
 1. En cuanto football-data publique los partidos de 16avos (Round of 32), corre
    **en local** una prueba sin escribir:
    ```powershell
@@ -95,6 +102,13 @@ equipos. Pasos:
      hay desajuste de conteo; **no confiar**, revisar manualmente.
 3. Si el orden cuadra, deja que el robot lo escriba solo (o corre sin `--test`).
 4. Repite la verificación para Octavos, Cuartos, Semifinal, Tercer Lugar y Final.
+
+> **Alternativa sin terminal (desde la app):** en el **Panel Admin**, dentro de la
+> pestaña de cada fase, hay un bloque **🌐 "Consultar resultados automáticamente"**.
+> Funciona en dos pasos seguros: **🔄 Consultar API y previsualizar** (muestra los
+> cruces/marcadores que rellenaría, **sin escribir**) y luego **✅ Aplicar**. Es el
+> mismo emparejado por orden que el robot, así que aplica el mismo cuidado: revisa
+> los cruces antes de aplicar. Implementado en `modules/api_resultados.py`.
 
 > Mapa de fases (stage de la API → fase de la BD), en `_STAGE_A_FASE`:
 > `GROUP_STAGE→Grupos`, `LAST_32/ROUND_OF_32→16avos`, `LAST_16→Octavos`,
@@ -116,6 +130,20 @@ python actualizar_resultados.py              # modo normal (gating + escribe)
 streamlit run app.py                          # ver la app (bloqueo + panel del día)
 ```
 
+### Respaldo / restauración (red de seguridad)
+
+```powershell
+python scripts/backup_firestore.py                                   # respalda → backups/quiniela_backup_<fecha>.json
+python scripts/backup_firestore.py --inspeccionar <archivo>          # ver qué contiene, sin tocar nada
+python scripts/backup_firestore.py --restaurar <archivo>             # DRY-RUN: muestra qué restauraría
+python scripts/backup_firestore.py --restaurar <archivo> --si        # restaura TODO (partidos + pronósticos)
+python scripts/backup_firestore.py --restaurar <archivo> --solo-partidos --si      # solo meta/partidos
+python scripts/backup_firestore.py --restaurar <archivo> --solo-pronosticos --si   # solo pronósticos
+```
+
+> Los respaldos viven en `backups/` (ignorado por Git: contiene datos de las
+> personas). Restaurar reescribe el documento completo; por eso exige `--si`.
+
 ---
 
 ## 7. Problemas comunes y solución
@@ -130,6 +158,7 @@ streamlit run app.py                          # ver la app (bloqueo + panel del 
 | Las horas se ven corridas en la app | Cambió la zona de los datos | Ajustar `TZ_LOCAL` en `modules/horario.py` |
 | Gasta muchas llamadas | Ventana mal calculada | Revisar `DURACION_ESTIMADA_MIN` y `POLL_MAX_H` |
 | Se acaban los minutos de GitHub (repo privado) | Cron muy frecuente | Subir intervalo a `*/10`/`*/15` o hacer el repo público |
+| **No cambian los resultados solos** (pero a mano sí) | El **`schedule` de GitHub no dispara** (cron nuevo: GitHub tarda en registrarlo; los `*/5` son best-effort y se retrasan/descartan) | No se puede forzar el evento `schedule`. Disparar a mano (botón **Run workflow** o API, ver §10). Verificar en Actions que aparezcan corridas con `event=schedule`, no solo `workflow_dispatch`. Un push a `main` que toque el workflow a veces lo "despierta". |
 
 **Plan B siempre disponible:** capturar el marcador a mano en el **Panel Admin**
 de la app. El robot no pelea con eso (si el marcador ya está y coincide, no hace nada).
@@ -142,7 +171,9 @@ de la app. El robot no pelea con eso (si el marcador ya está y coincide, no hac
 - `modules/horario.py` — zona horaria, bloqueo por hora, estado, "partidos de hoy".
 - `modules/ui_tablero.py` — bloqueo de pronósticos al kickoff.
 - `modules/ui_tabla_general.py` — panel "Partidos de hoy".
-- `modules/ui_admin.py` — captura manual (plan B) + horas en hora de México.
+- `modules/ui_admin.py` — captura manual (plan B) + botón de consulta a la API por fase + horas en hora de México.
+- `modules/api_resultados.py` — puente app↔robot: previsualiza/aplica la consulta a la API por fase.
+- `scripts/backup_firestore.py` — respaldo y restauración de Firestore (red de seguridad).
 - `.github/workflows/resultados.yml` — cron y ejecución en Actions.
 - `requirements-bot.txt` — dependencias del robot (sin Streamlit).
 
@@ -157,6 +188,47 @@ de la app. El robot no pelea con eso (si el marcador ya está y coincide, no hac
       `450`, `None`, `button`, etc.).
 - Si cambian mucho los horarios de los partidos, **recalcular la franja del cron**
   (los inicios iban de 10:00 a 22:00 MX; por eso `0-6,18-23` UTC).
+
+---
+
+## 10. Diario de incidencias
+
+### 23-jun-2026 — "no cambia los resultados"
+
+**Síntoma reportado:** la app no actualiza marcadores sola tras integrar la API.
+
+**Diagnóstico (NO era bug del código):**
+- El robot funciona: en `--test`/`--dry-run` detectó y habría escrito `Portugal 5–0
+  Uzbekistán`. Se corrió en modo normal y **se guardó** ese marcador (44→45/104).
+- En GitHub Actions solo existían **2 corridas, ambas `workflow_dispatch` (manuales)**;
+  el **`schedule` (cron) tenía 0 ejecuciones**. El workflow se subió ese mismo día
+  ~02:17 MX y GitHub aún no había registrado/activado el cron nuevo.
+- Los 44 resultados previos venían de corridas **locales `--forzar`** de la noche
+  anterior (última escritura 23:21 MX del 22-jun), no del cron.
+- Conclusión: el código, los secretos y Firestore están **OK**; el único eslabón
+  que nunca había corrido solo era el `schedule`.
+
+**Prueba del camino completo en la nube:** se lanzó un `workflow_dispatch` por API y
+terminó **success**, conectó a Firestore (`Partidos en BD: 104`) y el gating dio
+`⏸️ Nada que revisar` (0 llamadas, porque ya no había pendientes). Eso confirma que
+toda la tubería de Actions sirve.
+
+**Forzar una corrida a mano (sin esperar al cron):**
+- UI: Actions → "Actualizar marcadores" → **Run workflow**.
+- API (token del propio repo vía Git Credential Manager):
+  ```bash
+  TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | grep '^password=' | cut -d= -f2-)
+  curl -X POST -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+    https://api.github.com/repos/Ivncitto/quiniela/actions/workflows/resultados.yml/dispatches \
+    -d '{"ref":"main"}'      # 204 = disparado
+  ```
+- Ver últimas corridas (repo público, sin token):
+  `curl -s https://api.github.com/repos/Ivncitto/quiniela/actions/runs?per_page=5`
+
+**Pendiente dejado abierto:** hay un cambio local sin pushear en `resultados.yml`
+(un comentario "re-touch") pensado para empujar al scheduler; el push a `main` quedó
+**sin hacer** por decisión del usuario. El `schedule` debería empezar a dispararse
+solo en las horas siguientes. No se puede forzar el evento `schedule` desde fuera.
 
 ---
 

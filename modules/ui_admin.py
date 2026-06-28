@@ -223,6 +223,85 @@ def _boton_guardar_todo(lista: list[dict], key: str) -> None:
         st.rerun()
 
 
+def _bloque_api(partidos: list[dict], fase: str) -> None:
+    """
+    Bloque "consultar football-data.org" para una fase, con flujo SEGURO en dos
+    pasos: (1) previsualizar lo que rellenaría sin escribir, (2) aplicar si los
+    cruces se ven bien. Reutiliza la lógica del robot vía modules.api_resultados.
+    """
+    from modules.api_resultados import previsualizar_fase, obtener_token
+
+    sk = f"_api_prev_{fase}"
+    with st.expander(f"🌐 Consultar resultados automáticamente ({fase})", expanded=False):
+        token = obtener_token()
+        if not token:
+            st.info(
+                "Falta el token de football-data. Agrégalo en "
+                "`.streamlit/secrets.toml` → `[footballdata]` `token` para habilitar "
+                "la consulta automática."
+            )
+            return
+
+        st.caption(
+            "**Paso 1:** consulta la API y *muestra* lo que rellenaría (no escribe). "
+            "**Paso 2:** revisa los cruces y *aplica*. "
+            "💡 Respalda antes con `python scripts/backup_firestore.py`."
+        )
+
+        if st.button("🔄 Consultar API y previsualizar", key=f"api_prev_btn_{fase}",
+                     use_container_width=True):
+            with st.spinner("Consultando football-data.org..."):
+                st.session_state[sk] = previsualizar_fase(partidos, fase, token)
+            st.rerun()
+
+        prev = st.session_state.get(sk)
+        if not prev:
+            return
+
+        if prev.get("error"):
+            st.error(f"❌ {prev['error']}")
+            return
+
+        st.caption(
+            f"Rango consultado: {prev['dfrom']} → {prev['dto']} · "
+            f"{prev['n_matches']} partidos recibidos de la API."
+        )
+
+        for aviso in prev.get("avisos", []):
+            st.warning(aviso)
+
+        batch = prev.get("batch", [])
+        if not batch:
+            st.success("✅ La API no trae nada nuevo para esta fase (ya está al día).")
+            return
+
+        st.markdown(f"**{len(batch)} cambio(s) propuesto(s):**")
+        filas = []
+        for c in batch:
+            partes = []
+            if "equipo_local" in c:
+                partes.append(f"equipos → {c['equipo_local']} vs {c['equipo_visitante']}")
+            if "marcador_real" in c:
+                mr = c["marcador_real"]
+                partes.append(f"marcador → {mr['local']}–{mr['visitante']}")
+            filas.append({"id": c["id"], "cambio": " · ".join(partes)})
+        st.dataframe(filas, use_container_width=True, hide_index=True)
+
+        ca, cb = st.columns(2)
+        with ca:
+            if st.button(f"✅ Aplicar {len(batch)} cambio(s)", key=f"api_apply_{fase}",
+                         type="primary", use_container_width=True):
+                guardar_partidos_batch(batch)
+                st.session_state.pop(sk, None)
+                st.toast(f"✅ {len(batch)} cambio(s) aplicado(s) a {fase}.")
+                st.rerun()
+        with cb:
+            if st.button("✖️ Descartar previsualización", key=f"api_discard_{fase}",
+                         use_container_width=True):
+                st.session_state.pop(sk, None)
+                st.rerun()
+
+
 def _fmt_fecha_corta(fecha_iso: str) -> str:
     """Formatea fecha ISO (UTC) a hora local de México: 'Jue 11 Jun · 13:00'."""
     from modules.horario import formatear_fecha_local
@@ -254,6 +333,8 @@ def _tab_grupos(partidos: list[dict]) -> None:
             toggle_bloqueo_fase("Grupos", False)
             st.rerun()
 
+    st.markdown("<br>", unsafe_allow_html=True)
+    _bloque_api(partidos, "Grupos")
     st.markdown("<br>", unsafe_allow_html=True)
     _boton_guardar_todo(partidos_grupos, key="adm_save_all_grupos_top")
     st.markdown("<br>", unsafe_allow_html=True)
@@ -307,6 +388,8 @@ def _tab_fase(partidos: list[dict], fase: str) -> None:
             toggle_bloqueo_fase(fase, False)
             st.rerun()
 
+    st.markdown("<br>", unsafe_allow_html=True)
+    _bloque_api(partidos, fase)
     st.markdown("<br>", unsafe_allow_html=True)
     _boton_guardar_todo(ps_fase, key=f"adm_save_all_{fase}_top")
     st.markdown("<br>", unsafe_allow_html=True)

@@ -20,6 +20,7 @@ name: Actualizar marcadores
 on:
   schedule:
     # cada 5 min, solo en la franja con partidos: 12:00–01:00 MX = UTC 0–6 y 18–23
+    # (re-touch 23-jun para que GitHub registre/active el schedule)
     - cron: "*/5 0-6,18-23 * * *"
   workflow_dispatch:         # permite ejecutarlo a mano desde la pestaña Actions
 

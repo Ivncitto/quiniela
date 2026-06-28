@@ -8,6 +8,10 @@
 *.json
 !package.json
 
+# Respaldos de Firestore (contienen datos de las personas; *.json ya los ignora,
+# esto lo hace explícito)
+backups/
+
 # Archivos de entorno
 .env
 .env.local
