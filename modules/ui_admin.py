@@ -34,9 +34,12 @@ def _excluir_penal_adm(este: str, otro: str) -> None:
         st.session_state[otro] = False
 
 
-def _penales_adm(pid: str, es_elim: bool, local, visitante) -> str | None:
-    """Ganador de penales capturado por el admin (solo eliminatoria + empate)."""
-    if not es_elim or local is None or visitante is None or int(local) != int(visitante):
+def _penales_adm(pid: str, es_elim: bool) -> str | None:
+    """
+    Ganador de penales capturado por el admin en una eliminatoria, sin importar
+    el marcador. Devuelve "L"/"V"/None según el checkbox marcado.
+    """
+    if not es_elim:
         return None
     if st.session_state.get(f"adm_penL_{pid}"):
         return "L"
@@ -183,7 +186,7 @@ def _partido_row(partido: dict) -> None:
                 actualizar_equipos_partido(pid, nuevo_local, nuevo_vis)
             # Guardar marcador solo si ambos campos tienen valor
             if score_local is not None and score_vis is not None:
-                pen = _penales_adm(pid, es_elim, score_local, score_vis)
+                pen = _penales_adm(pid, es_elim)
                 actualizar_marcador_real(pid, int(score_local), int(score_vis), pen)
                 extra = ""
                 if pen == "L":
@@ -214,8 +217,10 @@ def _partido_row(partido: dict) -> None:
                 st.toast(f"🔓 {e_local} vs {e_visitante} reabierto para pronóstico tardío.")
                 st.rerun()
 
-    # ── Penales: solo eliminatoria y solo si el marcador real es EMPATE ────────
-    if es_elim and score_local is not None and score_vis is not None and int(score_local) == int(score_vis):
+    # ── Penales: en toda eliminatoria, sin importar el marcador ───────────────
+    # Si el partido se fue a penales, marca al ganador real aquí: todo participante
+    # que lo haya acertado gana +2, haya pronosticado empate o no.
+    if es_elim:
         kL, kV = f"adm_penL_{pid}", f"adm_penV_{pid}"
         if kL not in st.session_state:
             st.session_state[kL] = (real_pen == "L")
@@ -226,7 +231,7 @@ def _partido_row(partido: dict) -> None:
         with cpx:
             st.markdown(
                 '<div style="font-size:0.72rem; color:#FFD54F; padding-top:0.35rem;">'
-                '🥅 Ganador en penales:</div>',
+                '🥅 Ganador en penales (si hubo):</div>',
                 unsafe_allow_html=True,
             )
         with cp1:
@@ -274,7 +279,7 @@ def _guardar_todos(lista: list[dict]) -> int:
         sl = st.session_state.get(k_sl)
         sv = st.session_state.get(k_sv)
         if sl is not None and sv is not None:
-            pen = _penales_adm(pid, es_eliminatoria(partido.get("fase")), sl, sv)
+            pen = _penales_adm(pid, es_eliminatoria(partido.get("fase")))
             mr = partido.get("marcador_real", {})
             if mr.get("local") != sl or mr.get("visitante") != sv or mr.get("penales") != pen:
                 cambio["marcador_real"] = {"local": int(sl), "visitante": int(sv), "penales": pen}
