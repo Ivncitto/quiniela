@@ -22,8 +22,10 @@ from modules.firestore_db import (
     guardar_partidos_batch,
     toggle_bloqueo_partido,
     toggle_bloqueo_fase,
+    toggle_forzar_abierto,
 )
 from modules.scoring import es_eliminatoria
+from modules.horario import esta_cerrado
 
 
 def _excluir_penal_adm(este: str, otro: str) -> None:
@@ -110,9 +112,18 @@ def _partido_row(partido: dict) -> None:
     real_pen     = marcador.get("penales")  # "L" / "V" / None
     es_elim      = es_eliminatoria(partido.get("fase"))
 
-    estado_color = "#EF5350" if bloqueado else "#66BB6A"
+    forzado      = partido.get("forzar_abierto", False)
+    cerrado_efe  = esta_cerrado(partido)   # estado real para pronosticar
+    estado_color = "#EF5350" if cerrado_efe else "#66BB6A"
     estado_icon  = "🔒" if bloqueado else "🔓"
     hay_score    = real_l is not None
+
+    if forzado:
+        texto_estado = "🔓 Reabierto (pronóstico tardío)"
+    elif cerrado_efe:
+        texto_estado = "Cerrado"
+    else:
+        texto_estado = "Abierto"
 
     # ── Indicador de estado inline ────────────────────────────────────────────
     st.markdown(
@@ -120,14 +131,14 @@ def _partido_row(partido: dict) -> None:
         f'<span style="width:7px;height:7px;border-radius:50%;'
         f'background:{estado_color};display:inline-block;"></span>'
         f'<span style="font-size:0.72rem;color:{estado_color};">'
-        f'{"Cerrado" if bloqueado else "Abierto"}</span>'
+        f'{texto_estado}</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
 
     # ── Fila principal: nombres + scores + botones ─────────────────────────────
-    c_tl, c_sl, c_sep, c_sv, c_tv, c_save, c_lock = st.columns(
-        [2.8, 0.75, 0.25, 0.75, 2.8, 1.3, 0.9]
+    c_tl, c_sl, c_sep, c_sv, c_tv, c_save, c_lock, c_open = st.columns(
+        [2.8, 0.75, 0.25, 0.75, 2.8, 1.3, 0.9, 1.0]
     )
 
     with c_tl:
@@ -188,6 +199,20 @@ def _partido_row(partido: dict) -> None:
         if st.button(estado_icon, key=f"adm_lock_{pid}", use_container_width=True):
             toggle_bloqueo_partido(pid, not bloqueado)
             st.rerun()
+
+    with c_open:
+        if forzado:
+            if st.button("↩️", key=f"adm_reabrir_{pid}", use_container_width=True,
+                         help="Quitar la reapertura: el partido vuelve a regirse por su hora."):
+                toggle_forzar_abierto(pid, False)
+                st.rerun()
+        else:
+            if st.button("🔓➕", key=f"adm_reabrir_{pid}", use_container_width=True,
+                         help="Reabrir este partido para meter un pronóstico tardío, "
+                              "aunque ya haya pasado su hora de inicio."):
+                toggle_forzar_abierto(pid, True)
+                st.toast(f"🔓 {e_local} vs {e_visitante} reabierto para pronóstico tardío.")
+                st.rerun()
 
     # ── Penales: solo eliminatoria y solo si el marcador real es EMPATE ────────
     if es_elim and score_local is not None and score_vis is not None and int(score_local) == int(score_vis):
@@ -387,8 +412,8 @@ def _tab_grupos(partidos: list[dict]) -> None:
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Cabecera de columnas ───────────────────────────────────────────────────
-    hc1, hc2, hc3, hc4, hc5, hc6, hc7 = st.columns(
-        [2.8, 0.75, 0.25, 0.75, 2.8, 1.3, 0.9]
+    hc1, hc2, hc3, hc4, hc5, hc6, hc7, hc8 = st.columns(
+        [2.8, 0.75, 0.25, 0.75, 2.8, 1.3, 0.9, 1.0]
     )
     hc1.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">LOCAL</span>',       unsafe_allow_html=True)
     hc2.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">GOL</span>',        unsafe_allow_html=True)
@@ -442,8 +467,8 @@ def _tab_fase(partidos: list[dict], fase: str) -> None:
     st.markdown("<br>", unsafe_allow_html=True)
 
     # Cabecera
-    hc1, hc2, hc3, hc4, hc5, hc6, hc7 = st.columns(
-        [2.8, 0.75, 0.25, 0.75, 2.8, 1.3, 0.9]
+    hc1, hc2, hc3, hc4, hc5, hc6, hc7, hc8 = st.columns(
+        [2.8, 0.75, 0.25, 0.75, 2.8, 1.3, 0.9, 1.0]
     )
     hc1.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">LOCAL</span>',      unsafe_allow_html=True)
     hc2.markdown('<span style="font-size:0.7rem;color:rgba(200,230,200,0.4);">GOL</span>',       unsafe_allow_html=True)

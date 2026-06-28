@@ -72,8 +72,16 @@ def esta_cerrado(partido: dict, ahora: datetime | None = None) -> bool:
       - el admin lo bloqueó manualmente (campo `bloqueado`), O
       - ya llegó (o pasó) el instante de inicio.
 
+    EXCEPCIÓN: si el admin lo reabrió manualmente (campo `forzar_abierto`), el
+    partido queda ABIERTO aunque ya haya pasado su hora de inicio. Sirve para
+    meter un pronóstico tardío que llegó por fuera (ej. por mensaje) y no se
+    capturó a tiempo.
+
     kickoff a las 13:00 → cerrado cuando ahora >= 13:00:00 (12:59:59 abierto).
     """
+    if partido.get("forzar_abierto", False):
+        return False
+
     if partido.get("bloqueado", False):
         return True
 

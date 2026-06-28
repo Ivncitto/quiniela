@@ -265,6 +265,24 @@ def toggle_bloqueo_partido(partido_id: str, bloqueado: bool):
     _modificar_partidos(_f)
 
 
+def toggle_forzar_abierto(partido_id: str, abierto: bool):
+    """
+    (Admin) Reabre (o cierra) manualmente un partido para permitir un pronóstico
+    tardío aunque ya haya pasado su hora de inicio.
+
+    Al reabrir se quita también el bloqueo manual para que quede realmente
+    editable; al desactivarlo, el partido vuelve a regirse por la hora normal.
+    """
+    def _f(p):
+        if p.get("id") == partido_id:
+            p["forzar_abierto"] = abierto
+            if abierto:
+                p["bloqueado"] = False
+            return True
+        return False
+    _modificar_partidos(_f)
+
+
 def actualizar_equipos_partido(partido_id: str, equipo_local: str, equipo_visitante: str):
     """(Admin) Actualiza los nombres de los equipos de un partido."""
     def _f(p):
