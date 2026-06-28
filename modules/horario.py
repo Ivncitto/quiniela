@@ -124,6 +124,43 @@ def partidos_de_hoy(partidos: list[dict], ahora: datetime | None = None) -> list
     return [p for _, p in del_dia]
 
 
+def fase_en_curso(partidos: list[dict], ahora: datetime | None = None) -> str | None:
+    """
+    Determina la fase del torneo que corresponde a la fecha actual, para abrir
+    "Mi Quiniela" directamente en la pestaña de la ronda en curso.
+
+    Criterio (en orden):
+      1. Si hay partidos HOY, la fase del primero de hoy.
+      2. Si no, la fase del próximo partido por jugar (kickoff futuro más cercano).
+      3. Si ya pasaron todos, la fase del último partido con fecha.
+      4. None si no hay partidos con fecha.
+    """
+    ahora = ahora or ahora_local()
+
+    # 1) Partidos de hoy
+    de_hoy = partidos_de_hoy(partidos, ahora)
+    if de_hoy:
+        return de_hoy[0].get("fase")
+
+    # Construir (kickoff, fase) de todos los partidos con fecha válida
+    con_fecha = []
+    for p in partidos:
+        k = parse_kickoff(p.get("fecha", ""))
+        if k is not None and p.get("fase"):
+            con_fecha.append((k, p.get("fase")))
+
+    if not con_fecha:
+        return None
+
+    # 2) Próximo partido por jugar
+    futuros = [(k, f) for k, f in con_fecha if k > ahora]
+    if futuros:
+        return min(futuros, key=lambda t: t[0])[1]
+
+    # 3) Todo en el pasado: fase del último partido
+    return max(con_fecha, key=lambda t: t[0])[1]
+
+
 def formatear_fecha_local(fecha_iso: str) -> str:
     """
     Formatea una fecha ISO (hora de México) a 'Mar 23 Jun · 17:00'.

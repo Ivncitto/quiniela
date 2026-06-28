@@ -23,6 +23,24 @@ from modules.firestore_db import (
     toggle_bloqueo_partido,
     toggle_bloqueo_fase,
 )
+from modules.scoring import es_eliminatoria
+
+
+def _excluir_penal_adm(este: str, otro: str) -> None:
+    """Callback: marcar un equipo como ganador de penales desmarca el otro."""
+    if st.session_state.get(este):
+        st.session_state[otro] = False
+
+
+def _penales_adm(pid: str, es_elim: bool, local, visitante) -> str | None:
+    """Ganador de penales capturado por el admin (solo eliminatoria + empate)."""
+    if not es_elim or local is None or visitante is None or int(local) != int(visitante):
+        return None
+    if st.session_state.get(f"adm_penL_{pid}"):
+        return "L"
+    if st.session_state.get(f"adm_penV_{pid}"):
+        return "V"
+    return None
 
 _ORDEN_FASES = [
     "Grupos",
@@ -89,6 +107,8 @@ def _partido_row(partido: dict) -> None:
     marcador     = partido.get("marcador_real",      {})
     real_l       = marcador.get("local")
     real_v       = marcador.get("visitante")
+    real_pen     = marcador.get("penales")  # "L" / "V" / None
+    es_elim      = es_eliminatoria(partido.get("fase"))
 
     estado_color = "#EF5350" if bloqueado else "#66BB6A"
     estado_icon  = "🔒" if bloqueado else "🔓"
@@ -152,8 +172,14 @@ def _partido_row(partido: dict) -> None:
                 actualizar_equipos_partido(pid, nuevo_local, nuevo_vis)
             # Guardar marcador solo si ambos campos tienen valor
             if score_local is not None and score_vis is not None:
-                actualizar_marcador_real(pid, int(score_local), int(score_vis))
-                st.toast(f"✅ {nuevo_local} {score_local}–{score_vis} {nuevo_vis}")
+                pen = _penales_adm(pid, es_elim, score_local, score_vis)
+                actualizar_marcador_real(pid, int(score_local), int(score_vis), pen)
+                extra = ""
+                if pen == "L":
+                    extra = f" · penales: {nuevo_local}"
+                elif pen == "V":
+                    extra = f" · penales: {nuevo_vis}"
+                st.toast(f"✅ {nuevo_local} {score_local}–{score_vis} {nuevo_vis}{extra}")
             else:
                 st.toast(f"✏️ {nuevo_local} vs {nuevo_vis} (sin marcador)")
             st.rerun()
@@ -162,6 +188,26 @@ def _partido_row(partido: dict) -> None:
         if st.button(estado_icon, key=f"adm_lock_{pid}", use_container_width=True):
             toggle_bloqueo_partido(pid, not bloqueado)
             st.rerun()
+
+    # ── Penales: solo eliminatoria y solo si el marcador real es EMPATE ────────
+    if es_elim and score_local is not None and score_vis is not None and int(score_local) == int(score_vis):
+        kL, kV = f"adm_penL_{pid}", f"adm_penV_{pid}"
+        if kL not in st.session_state:
+            st.session_state[kL] = (real_pen == "L")
+        if kV not in st.session_state:
+            st.session_state[kV] = (real_pen == "V")
+
+        cpx, cp1, cp2 = st.columns([2.8, 0.75 + 0.25 + 0.75, 2.8 + 1.3 + 0.9])
+        with cpx:
+            st.markdown(
+                '<div style="font-size:0.72rem; color:#FFD54F; padding-top:0.35rem;">'
+                '🥅 Ganador en penales:</div>',
+                unsafe_allow_html=True,
+            )
+        with cp1:
+            st.checkbox(nuevo_local, key=kL, on_change=_excluir_penal_adm, args=(kL, kV))
+        with cp2:
+            st.checkbox(nuevo_vis, key=kV, on_change=_excluir_penal_adm, args=(kV, kL))
 
     # Separador ligero
     st.markdown(
@@ -203,9 +249,10 @@ def _guardar_todos(lista: list[dict]) -> int:
         sl = st.session_state.get(k_sl)
         sv = st.session_state.get(k_sv)
         if sl is not None and sv is not None:
+            pen = _penales_adm(pid, es_eliminatoria(partido.get("fase")), sl, sv)
             mr = partido.get("marcador_real", {})
-            if mr.get("local") != sl or mr.get("visitante") != sv:
-                cambio["marcador_real"] = {"local": int(sl), "visitante": int(sv)}
+            if mr.get("local") != sl or mr.get("visitante") != sv or mr.get("penales") != pen:
+                cambio["marcador_real"] = {"local": int(sl), "visitante": int(sv), "penales": pen}
 
         if len(cambio) > 1:   # tiene algo además de "id"
             cambios.append(cambio)

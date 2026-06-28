@@ -1,16 +1,44 @@
 """
 Módulo de cálculo de puntuación de la Quiniela.
 
-Sistema de puntuación:
-  - 3 puntos: Marcador exacto correcto.
-  - 1 punto:  Resultado correcto (local/empate/visitante) pero marcador diferente.
-  - 0 puntos: Resultado incorrecto o sin pronóstico.
+Sistema de puntuación (se conserva el de siempre + bono de penales):
 
-Toda la lógica de negocio está centralizada aquí para facilitar
-pruebas unitarias y mantenimiento.
+  MARCADOR (todas las fases)
+    - 5 puntos: Marcador exacto correcto.
+    - 3 puntos: Resultado correcto (local/empate/visitante) pero marcador diferente.
+    - 0 puntos: Resultado incorrecto o sin pronóstico.
+
+  PENALES — bono EXTRA solo en fases eliminatorias (16avos en adelante)
+    - +2 puntos: SOLO cuando se pronosticó EMPATE (el partido se va a penales) y
+      se acierta quién gana la tanda. No importan los goles de la tanda, solo el
+      ganador. Es aditivo al marcador.
+
+    Así, un partido eliminatorio empatado puede dar hasta 7 puntos
+    (5 por el empate exacto + 2 por acertar el ganador en penales) o
+    5 puntos (3 por acertar el empate + 2 por penales).
+
+  La fase de Grupos NO usa penales (un empate ahí es resultado final).
+
+Representación del ganador en penales: "L" (gana el local) o "V" (gana el
+visitante). Se guarda en el campo "penales" tanto del pronóstico como del
+marcador real.
 """
 
 import pandas as pd
+
+
+# Puntos extra por acertar el ganador en penales (solo eliminatorias, en empate).
+PUNTOS_PENALES = 2
+
+# Fases que habilitan el bono de penales. Todo lo demás (Grupos) no lo usa.
+FASES_ELIMINATORIA = {
+    "16avos", "Octavos", "Cuartos", "Semifinal", "Tercer Lugar", "Final",
+}
+
+
+def es_eliminatoria(fase: str | None) -> bool:
+    """True si la fase usa el esquema eliminatorio (penales habilitados)."""
+    return fase in FASES_ELIMINATORIA
 
 
 # ─── Funciones auxiliares ─────────────────────────────────────────────────────
@@ -32,41 +60,77 @@ def _resultado(goles_local: int, goles_visitante: int) -> str:
 
 # ─── Función principal de puntuación ─────────────────────────────────────────
 
-def calcular_puntos(pronostico: dict, marcador_real: dict) -> int:
+def desglose_puntos(pronostico: dict, marcador_real: dict, fase: str | None = None) -> dict:
     """
-    Calcula los puntos obtenidos por un pronóstico dado el marcador real.
+    Calcula el desglose de puntos de un pronóstico dado el marcador real.
 
     Args:
-        pronostico:    {"local": int, "visitante": int}
-        marcador_real: {"local": int | None, "visitante": int | None}
+        pronostico:    {"local": int, "visitante": int, "penales": "L"|"V"|None}
+        marcador_real: {"local": int|None, "visitante": int|None, "penales": "L"|"V"|None}
+        fase:          fase del partido (para habilitar el bono de penales).
 
     Returns:
-        0, 1 o 3 puntos. Retorna 0 si el partido aún no tiene marcador real.
+        Dict con:
+          base            -> puntos por marcador (0, 3 o 5)
+          penales         -> puntos extra por penales (0 o 2)
+          total           -> base + penales
+          exacto          -> True si acertó el marcador exacto (5 pts)
+          resultado       -> True si acertó solo el resultado (3 pts)
+          acierto_penales -> True si acertó el ganador en penales (+2 pts)
+        Todo en 0/False si el partido aún no tiene marcador real.
     """
-    # Si no hay marcador real, no se pueden calcular puntos aún
+    out = {
+        "base": 0, "penales": 0, "total": 0,
+        "exacto": False, "resultado": False, "acierto_penales": False,
+    }
+
+    marcador_real = marcador_real or {}
     real_local = marcador_real.get("local")
     real_visitante = marcador_real.get("visitante")
 
+    # Si no hay marcador real, no se pueden calcular puntos aún
     if real_local is None or real_visitante is None:
-        return 0
+        return out
 
-    pron_local = pronostico.get("local")
-    pron_visitante = pronostico.get("visitante")
+    pron = pronostico or {}
+    pron_local = pron.get("local")
+    pron_visitante = pron.get("visitante")
 
-    # Sin pronóstico registrado
-    if pron_local is None or pron_visitante is None:
-        return 0
+    # ── Puntos base por marcador (sistema de siempre: 5 / 3 / 0) ──────────────
+    if pron_local is not None and pron_visitante is not None:
+        if pron_local == real_local and pron_visitante == real_visitante:
+            out["base"] = 5
+            out["exacto"] = True
+        elif _resultado(pron_local, pron_visitante) == _resultado(real_local, real_visitante):
+            out["base"] = 3
+            out["resultado"] = True
 
-    # ── 3 puntos: Marcador exacto ─────────────────────────────────────────────
-    if pron_local == real_local and pron_visitante == real_visitante:
-        return 5
+    # ── Bono de penales: solo eliminatorias y solo si se pronosticó EMPATE ────
+    if es_eliminatoria(fase):
+        real_pen = marcador_real.get("penales")
+        pron_pen = pron.get("penales")
+        real_empate = real_local == real_visitante
+        pron_empate = (
+            pron_local is not None and pron_visitante is not None
+            and pron_local == pron_visitante
+        )
+        if real_empate and pron_empate and real_pen and pron_pen and pron_pen == real_pen:
+            out["penales"] = PUNTOS_PENALES
+            out["acierto_penales"] = True
 
-    # ── 1 punto: Resultado correcto ───────────────────────────────────────────
-    if _resultado(pron_local, pron_visitante) == _resultado(real_local, real_visitante):
-        return 3
+    out["total"] = out["base"] + out["penales"]
+    return out
 
-    # ── 0 puntos: Sin acierto ─────────────────────────────────────────────────
-    return 0
+
+def calcular_puntos(pronostico: dict, marcador_real: dict, fase: str | None = None) -> int:
+    """
+    Puntos totales obtenidos por un pronóstico (marcador + bono de penales).
+
+    Returns:
+        En Grupos: 0, 3 o 5.
+        En eliminatorias con empate: además puede sumar +2 por penales (hasta 7).
+    """
+    return desglose_puntos(pronostico, marcador_real, fase)["total"]
 
 
 # ─── Cálculo de rankings ──────────────────────────────────────────────────────
@@ -86,13 +150,10 @@ def calcular_ranking(
 
     Returns:
         DataFrame ordenado por puntos (descendente) con columnas:
-        Nombre, Puntos, Exactos (5pts), Parciales (3pts), Jugados.
+        Nombre, Puntos, Exactos (5pts), Parciales (3pts), Penales (+2), Jugados.
     """
-    # Mapa de partidos para búsqueda rápida: {partido_id: marcador_real}
-    mapa_partidos: dict[str, dict] = {
-        p["id"]: p.get("marcador_real", {})
-        for p in partidos
-    }
+    # Mapa de partidos para búsqueda rápida: {partido_id: partido}
+    mapa_partidos: dict[str, dict] = {p["id"]: p for p in partidos}
 
     filas = []
 
@@ -106,23 +167,27 @@ def calcular_ranking(
         puntos_total = 0
         exactos = 0
         parciales = 0
+        penales = 0
         jugados = 0
 
         for pron in prons_usuario:
             partido_id = pron.get("partido_id", "")
-            marcador_real = mapa_partidos.get(partido_id, {})
+            partido = mapa_partidos.get(partido_id, {})
+            marcador_real = partido.get("marcador_real", {})
             marcador_pron = pron.get("marcador", {})
 
-            pts = calcular_puntos(marcador_pron, marcador_real)
+            d = desglose_puntos(marcador_pron, marcador_real, partido.get("fase"))
 
             # Solo contar si el partido ya tiene marcador real
             if marcador_real.get("local") is not None:
                 jugados += 1
-                puntos_total += pts
-                if pts == 5:
+                puntos_total += d["total"]
+                if d["exacto"]:
                     exactos += 1
-                elif pts == 3:
+                elif d["resultado"]:
                     parciales += 1
+                if d["acierto_penales"]:
+                    penales += 1
 
         filas.append({
             "uid": uid,
@@ -130,11 +195,13 @@ def calcular_ranking(
             "Puntos": puntos_total,
             "🎯 Exactos": exactos,
             "✅ Parciales": parciales,
+            "🥅 Penales": penales,
             "⚽ Jugados": jugados,
         })
 
+    columnas = ["Nombre", "Puntos", "🎯 Exactos", "✅ Parciales", "🥅 Penales", "⚽ Jugados"]
     if not filas:
-        return pd.DataFrame(columns=["Nombre", "Puntos", "🎯 Exactos", "✅ Parciales", "⚽ Jugados"])
+        return pd.DataFrame(columns=columnas)
 
     df = pd.DataFrame(filas)
     df = df.sort_values("Puntos", ascending=False).reset_index(drop=True)
@@ -178,7 +245,7 @@ def resumen_pronostico_usuario(
     Calcula un resumen de puntos de un usuario específico.
 
     Returns:
-        Dict con: puntos_total, exactos, parciales, jugados, pendientes.
+        Dict con: puntos_total, exactos, parciales, penales, jugados.
     """
     mapa_partidos = {p["id"]: p for p in partidos}
     prons_usuario = [p for p in pronosticos if p.get("usuario_uid") == uid]
@@ -186,25 +253,29 @@ def resumen_pronostico_usuario(
     puntos_total = 0
     exactos = 0
     parciales = 0
+    penales = 0
     jugados = 0
 
     for pron in prons_usuario:
         partido = mapa_partidos.get(pron.get("partido_id", ""), {})
         marcador_real = partido.get("marcador_real", {})
-        pts = calcular_puntos(pron.get("marcador", {}), marcador_real)
+        d = desglose_puntos(pron.get("marcador", {}), marcador_real, partido.get("fase"))
 
         if marcador_real.get("local") is not None:
             jugados += 1
-            puntos_total += pts
-            if pts == 5:
+            puntos_total += d["total"]
+            if d["exacto"]:
                 exactos += 1
-            elif pts == 3:
+            elif d["resultado"]:
                 parciales += 1
+            if d["acierto_penales"]:
+                penales += 1
 
     return {
         "puntos_total": puntos_total,
         "exactos": exactos,
         "parciales": parciales,
+        "penales": penales,
         "jugados": jugados,
         "pronosticos_registrados": len(prons_usuario),
     }

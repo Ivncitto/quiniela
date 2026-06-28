@@ -135,6 +135,7 @@ def mostrar_tabla_general():
             "Puntos":        st.column_config.NumberColumn("🏆 Puntos Totales", width="small", format="%d"),
             "🎯 Exactos":    st.column_config.NumberColumn("🎯 Exactos (5pts)", width="small", format="%d"),
             "✅ Parciales":  st.column_config.NumberColumn("✅ Parciales (3pts)", width="small", format="%d"),
+            "🥅 Penales":    st.column_config.NumberColumn("🥅 Penales (+2)",   width="small", format="%d"),
             "⚽ Jugados":    st.column_config.NumberColumn("⚽ Jugados",         width="small", format="%d"),
         },
         hide_index=False,

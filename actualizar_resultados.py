@@ -336,15 +336,41 @@ def aplicar_cambios(partidos: list[dict], matches: list[dict]) -> list[str]:
             cl = _clave_equipo(partido.get("equipo_local", ""))
             if cl == _clave_equipo(home_es):
                 local, visit = gh, ga
+                home_es_local = True
             elif cl == _clave_equipo(away_es):
                 local, visit = ga, gh   # estaban invertidos respecto a la BD
+                home_es_local = False
             else:
                 local, visit = gh, ga   # eliminatoria recién rellenada con orden de la API
+                home_es_local = True
+
+            # Ganador de penales: solo eliminatorias y solo si quedó empate (la
+            # tanda decide). football-data expone score.winner (HOME/AWAY_TEAM).
+            es_elim = bool(fase) and fase != "Grupos"
+            penales = None
+            if es_elim and int(local) == int(visit):
+                winner = m.get("score", {}).get("winner")
+                if winner == "HOME_TEAM":
+                    penales = "L" if home_es_local else "V"
+                elif winner == "AWAY_TEAM":
+                    penales = "V" if home_es_local else "L"
 
             mr = partido.get("marcador_real", {})
-            if mr.get("local") != local or mr.get("visitante") != visit:
-                partido["marcador_real"] = {"local": int(local), "visitante": int(visit)}
-                cambios.append(f"✅ {partido.get('equipo_local')} {local}–{visit} {partido.get('equipo_visitante')}")
+            if es_elim:
+                nuevo = {"local": int(local), "visitante": int(visit), "penales": penales}
+                cambio_mr = (mr.get("local") != local or mr.get("visitante") != visit
+                             or mr.get("penales") != penales)
+            else:
+                nuevo = {"local": int(local), "visitante": int(visit)}
+                cambio_mr = (mr.get("local") != local or mr.get("visitante") != visit)
+            if cambio_mr:
+                partido["marcador_real"] = nuevo
+                extra = ""
+                if penales == "L":
+                    extra = f" · penales: {partido.get('equipo_local')}"
+                elif penales == "V":
+                    extra = f" · penales: {partido.get('equipo_visitante')}"
+                cambios.append(f"✅ {partido.get('equipo_local')} {local}–{visit} {partido.get('equipo_visitante')}{extra}")
 
     return cambios
 

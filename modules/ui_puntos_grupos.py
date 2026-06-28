@@ -104,8 +104,9 @@ def mostrar_puntos_grupos():
         column_config={
             "Nombre":       st.column_config.TextColumn("👤 Nombre",            width="medium"),
             "Puntos":       st.column_config.NumberColumn("🏆 Puntos en Fase",   width="small", format="%d"),
-            "🎯 Exactos":   st.column_config.NumberColumn("🎯 Exactos (3pts)",   width="small", format="%d"),
-            "✅ Parciales": st.column_config.NumberColumn("✅ Parciales (1pt)",  width="small", format="%d"),
+            "🎯 Exactos":   st.column_config.NumberColumn("🎯 Exactos (5pts)",   width="small", format="%d"),
+            "✅ Parciales": st.column_config.NumberColumn("✅ Parciales (3pts)", width="small", format="%d"),
+            "🥅 Penales":   st.column_config.NumberColumn("🥅 Penales (+2)",     width="small", format="%d"),
             "⚽ Jugados":   st.column_config.NumberColumn("⚽ Jugados",           width="small", format="%d"),
         },
         hide_index=False,

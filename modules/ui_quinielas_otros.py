@@ -14,7 +14,7 @@ from modules.firestore_db import (
     get_pronosticos_usuario,
     get_partidos,
 )
-from modules.scoring import calcular_puntos
+from modules.scoring import desglose_puntos
 
 _ORDEN_FASES = [
     "Grupos", "16avos", "Octavos", "Cuartos",
@@ -22,13 +22,26 @@ _ORDEN_FASES = [
 ]
 
 
-def _pts_badge(pts: int) -> str:
-    """Etiqueta textual para la columna de puntos."""
-    if pts == 5:
-        return "🎯 5 (exacto)"
-    if pts == 3:
-        return "✅ 3 (resultado)"
-    return "— 0"
+def _pts_badge(d: dict) -> str:
+    """Etiqueta textual para la columna de puntos a partir del desglose."""
+    if d["exacto"]:
+        base = "🎯 5 (exacto)"
+    elif d["resultado"]:
+        base = "✅ 3 (resultado)"
+    else:
+        base = "— 0"
+    if d["acierto_penales"]:
+        base += f"  +2 🥅 = {d['total']}"
+    return base
+
+
+def _nombre_penal(pen, local: str, visit: str) -> str:
+    """Nombre del equipo ganador en penales según 'L'/'V'."""
+    if pen == "L":
+        return local
+    if pen == "V":
+        return visit
+    return ""
 
 
 def mostrar_quinielas_otros():
@@ -95,18 +108,25 @@ def mostrar_quinielas_otros():
         hay_real  = real.get("local") is not None
         hay_prono = bool(prono)
 
+        d = desglose_puntos(prono or {}, real, p.get("fase"))
+        pts = d["total"]
+
         prono_str = f"{int(prono['local'])} - {int(prono['visitante'])}" if hay_prono else "— sin pronóstico"
         real_str  = f"{int(real['local'])} - {int(real['visitante'])}" if hay_real else "Pendiente"
 
-        pts = calcular_puntos(prono or {}, real)
+        # Anexar el ganador de penales (solo eliminatoria + empate)
+        if hay_prono and prono.get("penales"):
+            prono_str += f"  🥅 {_nombre_penal(prono.get('penales'), local, visit)}"
+        if hay_real and real.get("penales"):
+            real_str += f"  🥅 {_nombre_penal(real.get('penales'), local, visit)}"
 
         if hay_real:
             jugados += 1
             pts_total += pts
             acum += pts
-            if pts == 5:
+            if d["exacto"]:
                 exactos += 1
-            elif pts == 3:
+            elif d["resultado"]:
                 parciales += 1
         if not hay_prono:
             sin_pronostico += 1
@@ -117,9 +137,9 @@ def mostrar_quinielas_otros():
             "⚽ Partido":    f"{local}  vs  {visit}",
             "🔮 Pronóstico": prono_str,
             "⚽ Real":       real_str,
-            "🏆 Puntos":     _pts_badge(pts) if hay_real else "—",
+            "🏆 Puntos":     _pts_badge(d) if hay_real else "—",
             "🧮 Acumulado":  acum,
-            "_pts":          pts if hay_real else -1,   # -1 = pendiente (sin color)
+            "_pts":          d["base"] if hay_real else -1,   # color por marcador; -1 = pendiente
         })
 
     # ── Métricas de resumen del participante ───────────────────────────────────

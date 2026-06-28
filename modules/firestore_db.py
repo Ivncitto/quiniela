@@ -212,11 +212,16 @@ def _modificar_partidos(fn) -> int:
     return cambiados
 
 
-def actualizar_marcador_real(partido_id: str, local: int, visitante: int):
-    """(Admin) Actualiza el marcador real de un partido en el agregado."""
+def actualizar_marcador_real(partido_id: str, local: int, visitante: int, penales: str | None = None):
+    """
+    (Admin) Actualiza el marcador real de un partido en el agregado.
+
+    `penales` ("L"/"V"/None) indica quién ganó la tanda de penales; solo aplica
+    en eliminatorias con empate. Se guarda siempre (None lo limpia).
+    """
     def _f(p):
         if p.get("id") == partido_id:
-            p["marcador_real"] = {"local": local, "visitante": visitante}
+            p["marcador_real"] = {"local": local, "visitante": visitante, "penales": penales}
             return True
         return False
     _modificar_partidos(_f)
@@ -426,7 +431,9 @@ def guardar_pronosticos_batch(uid: str, predicciones: list[tuple]):
 
     Args:
         uid:          identificador del usuario.
-        predicciones: lista de tuplas (partido_id, local, visitante).
+        predicciones: lista de tuplas (partido_id, local, visitante) o
+                      (partido_id, local, visitante, penales). `penales` es
+                      "L"/"V"/None (ganador de penales en empates de eliminatoria).
 
     Returns:
         int: cuántos marcadores se escribieron.
@@ -435,10 +442,15 @@ def guardar_pronosticos_batch(uid: str, predicciones: list[tuple]):
         return 0
 
     db = get_db()
-    marcadores = {
-        pid: {"local": int(local), "visitante": int(visitante)}
-        for pid, local, visitante in predicciones
-    }
+    marcadores = {}
+    for item in predicciones:
+        pid, local, visitante = item[0], item[1], item[2]
+        penales = item[3] if len(item) > 3 else None
+        marcadores[pid] = {
+            "local": int(local),
+            "visitante": int(visitante),
+            "penales": penales,
+        }
     db.collection("pronosticos").document(uid).set({
         "usuario_uid":          uid,
         "marcadores":           marcadores,
