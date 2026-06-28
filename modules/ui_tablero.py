@@ -180,37 +180,33 @@ def _partido_card(partido: dict, uid: str, mis_pronosticos: dict) -> None:
             unsafe_allow_html=True,
         )
 
-    # ── Penales: solo eliminatorias y solo si el pronóstico es EMPATE ──────────
+    # ── Penales: disponible SIEMPRE en eliminatorias (pongas empate o no) ──────
+    # El bono de +2 lo puede ganar cualquiera que acierte al ganador de la tanda
+    # si el partido se va a penales, sin importar su marcador.
     if es_elim:
-        # Leer el marcador ACTUAL de los widgets (ya instanciados arriba).
-        cur_l = st.session_state.get(f"tb_sl_{pid}", mi_local)
-        cur_v = st.session_state.get(f"tb_sv_{pid}", mi_visitante)
-        es_empate = (cur_l is not None and cur_v is not None and int(cur_l) == int(cur_v))
+        kL, kV = f"tb_penL_{pid}", f"tb_penV_{pid}"
+        # Inicializar estado desde el pronóstico guardado (solo la 1ª vez).
+        if kL not in st.session_state:
+            st.session_state[kL] = (mi_penales == "L")
+        if kV not in st.session_state:
+            st.session_state[kV] = (mi_penales == "V")
 
-        if es_empate:
-            kL, kV = f"tb_penL_{pid}", f"tb_penV_{pid}"
-            # Inicializar estado desde el pronóstico guardado (solo la 1ª vez).
-            if kL not in st.session_state:
-                st.session_state[kL] = (mi_penales == "L")
-            if kV not in st.session_state:
-                st.session_state[kV] = (mi_penales == "V")
-
-            st.markdown(
-                '<div style="font-size:0.72rem; color:#FFD54F; margin:0.1rem 0 0.15rem;">'
-                '🥅 ¿Quién gana en PENALES? (+2 pts extra · opcional)</div>',
-                unsafe_allow_html=True,
+        st.markdown(
+            '<div style="font-size:0.72rem; color:#FFD54F; margin:0.1rem 0 0.15rem;">'
+            '🥅 Si hay PENALES, ¿quién gana? (+2 pts extra · opcional)</div>',
+            unsafe_allow_html=True,
+        )
+        cp1, cp2 = st.columns(2)
+        with cp1:
+            st.checkbox(
+                e_local, key=kL, disabled=bloqueado,
+                on_change=_excluir_penal, args=(kL, kV),
             )
-            cp1, cp2 = st.columns(2)
-            with cp1:
-                st.checkbox(
-                    e_local, key=kL, disabled=bloqueado,
-                    on_change=_excluir_penal, args=(kL, kV),
-                )
-            with cp2:
-                st.checkbox(
-                    e_visitante, key=kV, disabled=bloqueado,
-                    on_change=_excluir_penal, args=(kV, kL),
-                )
+        with cp2:
+            st.checkbox(
+                e_visitante, key=kV, disabled=bloqueado,
+                on_change=_excluir_penal, args=(kV, kL),
+            )
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -298,9 +294,9 @@ def _guardar_todos_pronosticos(uid: str, partidos: list[dict], mis_pronosticos: 
         if sl is None or sv is None:
             continue
 
-        # Ganador de penales: solo eliminatoria + empate; si no, None (lo limpia).
+        # Ganador de penales: disponible en toda eliminatoria (empate o no).
         penales = None
-        if es_eliminatoria(partido.get("fase")) and int(sl) == int(sv):
+        if es_eliminatoria(partido.get("fase")):
             if st.session_state.get(f"tb_penL_{pid}"):
                 penales = "L"
             elif st.session_state.get(f"tb_penV_{pid}"):

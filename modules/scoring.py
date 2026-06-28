@@ -9,13 +9,14 @@ Sistema de puntuación (se conserva el de siempre + bono de penales):
     - 0 puntos: Resultado incorrecto o sin pronóstico.
 
   PENALES — bono EXTRA solo en fases eliminatorias (16avos en adelante)
-    - +2 puntos: SOLO cuando se pronosticó EMPATE (el partido se va a penales) y
-      se acierta quién gana la tanda. No importan los goles de la tanda, solo el
-      ganador. Es aditivo al marcador.
+    - +2 puntos: si se acierta quién gana la tanda de penales. Lo puede llenar
+      CUALQUIERA (haya pronosticado empate o no); solo otorga puntos si el
+      partido realmente se definió en penales (el admin registró un ganador) y
+      se acierta ese ganador. No importan los goles de la tanda ni el marcador.
+      Es aditivo al marcador.
 
-    Así, un partido eliminatorio empatado puede dar hasta 7 puntos
-    (5 por el empate exacto + 2 por acertar el ganador en penales) o
-    5 puntos (3 por acertar el empate + 2 por penales).
+    Así, un partido eliminatorio que va a penales puede dar hasta 7 puntos
+    (5 por el marcador exacto del empate + 2 por acertar el ganador en penales).
 
   La fase de Grupos NO usa penales (un empate ahí es resultado final).
 
@@ -105,16 +106,14 @@ def desglose_puntos(pronostico: dict, marcador_real: dict, fase: str | None = No
             out["base"] = 3
             out["resultado"] = True
 
-    # ── Bono de penales: solo eliminatorias y solo si se pronosticó EMPATE ────
+    # ── Bono de penales: solo eliminatorias ───────────────────────────────────
+    # Lo puede ganar CUALQUIERA que haya elegido al ganador de penales, sin
+    # importar su marcador: basta con que el partido se haya ido a penales
+    # (el admin registró un ganador real) y que se acierte ese ganador.
     if es_eliminatoria(fase):
         real_pen = marcador_real.get("penales")
         pron_pen = pron.get("penales")
-        real_empate = real_local == real_visitante
-        pron_empate = (
-            pron_local is not None and pron_visitante is not None
-            and pron_local == pron_visitante
-        )
-        if real_empate and pron_empate and real_pen and pron_pen and pron_pen == real_pen:
+        if real_pen and pron_pen and pron_pen == real_pen:
             out["penales"] = PUNTOS_PENALES
             out["acierto_penales"] = True
 
