@@ -482,6 +482,106 @@ def _tab_fase(partidos: list[dict], fase: str) -> None:
     _boton_guardar_todo(ps_fase, key=f"adm_save_all_{fase}_bottom")
 
 
+def _seccion_capturar_pronostico(partidos: list[dict]) -> None:
+    """
+    (Admin) Captura/edita el pronóstico de CUALQUIER participante en cualquier
+    partido. Pensado para pronósticos tardíos que llegaron por fuera (mensaje)
+    y no se metieron a tiempo. Sobreescribe lo que el participante tenga guardado.
+    """
+    from modules.firestore_db import (
+        get_todos_los_usuarios,
+        get_pronosticos_usuario,
+        guardar_pronosticos_batch,
+    )
+
+    with st.expander("✍️ Capturar pronóstico de un participante (pronóstico tardío)"):
+        usuarios = get_todos_los_usuarios()
+        if not usuarios:
+            st.info("No hay participantes registrados todavía.")
+            return
+
+        st.caption(
+            "Escribe aquí el pronóstico de un participante que te llegó por fuera "
+            "y no se metió a tiempo. **Sobreescribe** lo que tenga guardado en ese "
+            "partido. (No cambia el marcador real, solo el pronóstico de esa persona.)"
+        )
+
+        mapa = {u.get("nombre", u.get("uid", "?")): u.get("uid", "") for u in usuarios}
+        nombres = sorted(mapa)
+
+        ps = sorted(partidos, key=lambda x: x.get("fecha", ""))
+
+        def _lbl(p: dict) -> str:
+            return (f"[{p.get('fase', '?')}] {p.get('equipo_local', '¿?')} vs "
+                    f"{p.get('equipo_visitante', '¿?')} · {p.get('fecha', '')[:10]}")
+
+        id_por_lbl = {_lbl(p): p["id"] for p in ps}
+
+        col_u, col_p = st.columns([2, 3])
+        with col_u:
+            nombre_sel = st.selectbox("👤 Participante", nombres, key="capt_user")
+        with col_p:
+            lbl_sel = st.selectbox("⚽ Partido", list(id_por_lbl), key="capt_match")
+
+        uid = mapa.get(nombre_sel, "")
+        pid = id_por_lbl.get(lbl_sel, "")
+        partido = next((p for p in ps if p["id"] == pid), {})
+        es_elim = es_eliminatoria(partido.get("fase"))
+        e_local = partido.get("equipo_local", "Local")
+        e_vis   = partido.get("equipo_visitante", "Visitante")
+
+        # Pronóstico actual de ese participante en ese partido
+        prono = get_pronosticos_usuario(uid).get(pid, {})
+        cur_l = prono.get("local")
+        cur_v = prono.get("visitante")
+        cur_pen = prono.get("penales")
+
+        if prono:
+            pen_txt = ""
+            if cur_pen == "L":
+                pen_txt = f" · 🥅 {e_local}"
+            elif cur_pen == "V":
+                pen_txt = f" · 🥅 {e_vis}"
+            st.caption(f"Actual de **{nombre_sel}**: {cur_l}–{cur_v}{pen_txt}")
+        else:
+            st.caption(f"**{nombre_sel}** aún no tiene pronóstico en este partido.")
+
+        cga, cgb = st.columns(2)
+        with cga:
+            gl = st.number_input(
+                f"⚽ Goles {e_local}", min_value=0, max_value=30,
+                value=int(cur_l) if cur_l is not None else None,
+                key=f"capt_l_{uid}_{pid}", placeholder="0",
+            )
+        with cgb:
+            gv = st.number_input(
+                f"⚽ Goles {e_vis}", min_value=0, max_value=30,
+                value=int(cur_v) if cur_v is not None else None,
+                key=f"capt_v_{uid}_{pid}", placeholder="0",
+            )
+
+        penales = None
+        if es_elim:
+            opts = ["— (sin penales)", e_local, e_vis]
+            idx = 1 if cur_pen == "L" else (2 if cur_pen == "V" else 0)
+            sel = st.selectbox(
+                "🥅 Si hay penales, ¿quién gana? (+2 pts extra)",
+                opts, index=idx, key=f"capt_pen_{uid}_{pid}",
+            )
+            if sel == e_local:
+                penales = "L"
+            elif sel == e_vis:
+                penales = "V"
+
+        if st.button("💾 Guardar pronóstico del participante", type="primary", key="capt_save"):
+            if gl is None or gv is None:
+                st.warning("Pon ambos goles antes de guardar.")
+            else:
+                guardar_pronosticos_batch(uid, [(pid, int(gl), int(gv), penales)])
+                st.success(f"✅ Pronóstico de {nombre_sel} guardado: {int(gl)}–{int(gv)} en {lbl_sel}.")
+                st.rerun()
+
+
 # ─── Función pública principal ────────────────────────────────────────────────
 
 def mostrar_panel_admin():
@@ -522,6 +622,11 @@ def mostrar_panel_admin():
     c2.metric("🔒 Bloqueados",  bloqueados)
     c3.metric("🔓 Abiertos",    total - bloqueados)
     c4.metric("⚽ Con marcador", con_score)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Capturar pronóstico de un participante (pronóstico tardío) ─────────────
+    _seccion_capturar_pronostico(partidos)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
